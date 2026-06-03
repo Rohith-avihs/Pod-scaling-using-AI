@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}ShopEase — Products{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hero {
+        text-align: center;
+        padding: 3rem 2rem 1.5rem;
+    }
+    .hero h1 {
+        font-family: 'Playfair Display', serif;
+        font-size: 3rem;
+        line-height: 1.1;
+        margin-bottom: 1rem;
+    }
+    .hero h1 span { color: var(--accent); }
+    .hero p { color: var(--muted); font-size: 1.1rem; max-width: 500px; margin: 0 auto; }
+
+    /* HORIZONTAL CONTROLS BAR */
+    .controls-bar {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.2rem;
+        margin-bottom: 2.5rem;
+    }
+    .controls-form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.2rem;
+        align-items: flex-end;
+    }
+    .control-item {
+        flex: 1;
+        min-width: 180px;
+    }
+    .control-item.price-item {
+        flex: 1.2;
+        min-width: 220px;
+    }
+    .control-item.actions-item {
+        flex: 0.8;
+        min-width: 180px;
+        display: flex;
+        gap: 0.5rem;
+    }
+    .control-item label {
+        display: block;
+        font-size: 0.78rem;
+        color: var(--muted);
+        margin-bottom: 0.4rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .control-item input, .control-item select {
+        width: 100%;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.65rem 0.9rem;
+        color: var(--text);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.9rem;
+        outline: none;
+        transition: border-color 0.2s;
+        height: 42px;
+    }
+    .control-item input:focus, .control-item select:focus {
+        border-color: var(--accent);
+    }
+    .price-range-inputs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+    }
+
+    /* CATALOG VIEW */
+    .section-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.6rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+    }
+    .section-title::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: var(--border);
+    }
+    .results-count {
+        font-size: 0.9rem;
+        color: var(--muted);
+        font-family: 'DM Sans', sans-serif;
+        font-weight: normal;
+    }
+
+    /* BALANCED MULTI-COLUMN PRODUCT GRID */
+    .products-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 2rem;
+    }
+    .product-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        transition: transform 0.2s, border-color 0.2s;
+        display: flex;
+        flex-direction: column;
+    }
+    .product-card:hover {
+        transform: translateY(-4px);
+        border-color: var(--accent);
+    }
+    .product-card img {
+        width: 100%;
+        height: 240px;
+        object-fit: cover;
+    }
+    .card-body { 
+        padding: 1.5rem; 
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+    }
+    .card-body h3 { 
+        font-size: 1.1rem; 
+        font-weight: 500; 
+        margin-bottom: 0.5rem; 
+    }
+    .card-body .price {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.4rem;
+        color: var(--accent);
+        margin-bottom: 1.2rem;
+    }
+    .card-body .price::before { content: '₹'; font-size: 1rem; }
+    
+    .card-actions { 
+        display: flex; 
+        gap: 0.8rem; 
+        margin-top: auto; 
+    }
+    .card-actions a, .card-actions form { flex: 1; }
+    .card-actions .btn { width: 100%; text-align: center; height: 40px; display: flex; align-items: center; justify-content: center; }
+
+    /* RESPONSIVE LAYOUT */
+    @media (max-width: 768px) {
+        .controls-form {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 1rem;
+        }
+        .control-item, .control-item.price-item, .control-item.actions-item {
+            width: 100%;
+        }
+        .products-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+    }
+    @media (max-width: 480px) {
+        .hero h1 { font-size: 2.2rem; }
+        .products-grid { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="hero">
+    <h1>Discover <span>Premium</span> Products</h1>
+    <p>Curated collection of top-quality items delivered to your doorstep.</p>
+</div>
+
+<!-- Re-arranged Top Horizontal Search and Filters Box -->
+<div class="controls-bar">
+    <form action="{{ url_for('index') }}" method="GET" class="controls-form">
+        
+        <div class="control-item">
+    <label for="category">Category</label>
+
+    <select id="category" name="category">
+        <option value="">All Categories</option>
+
+        {% for cat in categories %}
+            <option value="{{ cat.category }}"
+                {% if category == cat.category %}selected{% endif %}>
+                {{ cat.category }}
+            </option>
+        {% endfor %}
+    </select>
+</div>
+        <!-- Keywords Item -->
+        <div class="control-item">
+            <label for="search">Keywords</label>
+            <input type="text" id="search" name="search" value="{{ search_query }}" placeholder="Search products...">
+        </div>
+
+        <!-- Price Filtering Inputs -->
+        <div class="control-item price-item">
+            <label>Price Range (₹)</label>
+            <div class="price-range-inputs">
+                <input type="number" name="min_price" value="{{ min_price }}" min="0" placeholder="Min">
+                <input type="number" name="max_price" value="{{ max_price }}" min="0" placeholder="Max">
+            </div>
+        </div>
+
+        <!-- Order Sorting Selector -->
+        <div class="control-item">
+            <label for="sort">Sort By</label>
+            <select id="sort" name="sort">
+                <option value="" {% if not sort_by %}selected{% endif %}>Default (Newest)</option>
+                <option value="price_asc" {% if sort_by == 'price_asc' %}selected{% endif %}>Price: Low to High</option>
+                <option value="price_desc" {% if sort_by == 'price_desc' %}selected{% endif %}>Price: High to Low</option>
+                <option value="name_asc" {% if sort_by == 'name_asc' %}selected{% endif %}>Name: A to Z</option>
+                <option value="name_desc" {% if sort_by == 'name_desc' %}selected{% endif %}>Name: Z to A</option>
+            </select>
+        </div>
+
+        <!-- Submission and Reset Buttons -->
+        <div class="control-item actions-item">
+            <button type="submit" class="btn btn-primary" style="flex: 1.3; height: 42px;">Filter</button>
+            <a href="{{ url_for('index') }}" class="btn btn-outline" style="flex: 1; height: 42px;">Clear</a>
+        </div>
+    </form>
+</div>
+
+<!-- Main Catalog Container -->
+<h2 class="section-title">
+    All Products 
+    {% if products %}
+        <span class="results-count">({{ products|length }} found)</span>
+    {% endif %}
+</h2>
+
+{% if products %}
+<div class="products-grid">
+    {% for p in products %}
+    <div class="product-card">
+        <a href="/product/{{ p.id }}">
+            <img src="{{ p.image_url or 'https://via.placeholder.com/400x240?text=No+Image' }}" alt="{{ p.name }}">
+        </a>
+        <div class="card-body">
+            <h3>{{ p.name }}</h3>
+
+<div style="color:var(--muted);
+            font-size:0.85rem;
+            margin-bottom:0.5rem;">
+    {{ p.category }}
+</div>
+
+            <div class="price">{{ "%.2f"|format(p.price) }}</div>
+            <div class="card-actions">
+                <a href="/product/{{ p.id }}" class="btn btn-outline">View</a>
+                <form action="/cart/add/{{ p.id }}" method="POST">
+                    <button type="submit" class="btn btn-primary">Add to Cart</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align: center; padding: 4rem 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);">
+    <p style="color: var(--muted); margin-bottom: 1rem;">No items match your search filters.</p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary" style="display: inline-block; padding: 0.5rem 1.5rem;">Reset Filters</a>
+</div>
+{% endif %}
+{% endblock %}

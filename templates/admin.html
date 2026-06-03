@@ -1,0 +1,247 @@
+
+{% extends "base.html" %}
+{% block title %}Admin — ShopEase{% endblock %}
+
+{% block extra_css %}
+<style>
+    .admin-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        margin-bottom: 2rem;
+    }
+    .admin-grid {
+        display: grid;
+        grid-template-columns: 1fr 380px;
+        gap: 2rem;
+    }
+    .add-form {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem;
+        position: sticky;
+        top: 80px;
+    }
+    .add-form h3 {
+        font-family: 'Playfair Display', serif;
+        margin-bottom: 1.2rem;
+    }
+    .form-group {
+        margin-bottom: 1rem;
+    }
+    .form-group label {
+        display: block;
+        font-size: 0.82rem;
+        color: var(--muted);
+        margin-bottom: 0.3rem;
+        text-transform: uppercase;
+    }
+    .form-group input,
+    .form-group textarea,
+    .form-group select {
+        width: 100%;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.6rem 0.9rem;
+        color: var(--text);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.9rem;
+        outline: none;
+    }
+    .form-group input:focus,
+    .form-group textarea:focus,
+    .form-group select:focus {
+        border-color: var(--accent);
+    }
+
+    .form-group textarea {
+        resize: vertical;
+        min-height: 80px;
+    }
+
+    .products-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .products-table th {
+        text-align: left;
+        padding: 0.7rem 1rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.82rem;
+        color: var(--muted);
+        text-transform: uppercase;
+    }
+
+    .products-table td {
+        padding: 0.9rem 1rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.9rem;
+        vertical-align: middle;
+    }
+
+    .products-table img {
+        width: 50px;
+        height: 50px;
+        object-fit: cover;
+        border-radius: 6px;
+    }
+
+    @media (max-width: 800px) {
+        .admin-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="admin-title">Admin Panel</h1>
+
+<div class="admin-grid">
+
+    <div>
+        <h3 style="font-family:'Playfair Display',serif; margin-bottom:1rem;">
+            Products ({{ products|length }})
+        </h3>
+
+        <div style="width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:2rem;">
+            <table class="products-table">
+                <thead>
+                    <tr>
+                        <th>Img</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Price</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for p in products %}
+                    <tr>
+                        <td>
+                            <img src="{{ p.image_url or 'https://via.placeholder.com/50?text=?' }}"
+                                 alt="{{ p.name }}">
+                        </td>
+
+                        <td>{{ p.name }}</td>
+
+                        <td>
+    <span style="
+        background:var(--surface2);
+        padding:4px 8px;
+        border-radius:20px;
+        font-size:0.8rem;">
+        {{ p.category if p.category else 'Uncategorized' }}
+    </span>
+</td>
+
+                        <td>₹{{ "%.2f"|format(p.price) }}</td>
+
+                        <td>
+                            <a href="/admin/delete/{{ p.id }}"
+                               class="btn btn-danger"
+                               style="padding:0.3rem 0.7rem; font-size:0.8rem;"
+                               onclick="return confirm('Delete this product?')">
+                                Delete
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="add-form">
+    <form action="/admin/add-category" method="POST">
+
+    <div class="form-group">
+        <label>New Category</label>
+
+        <input type="text"
+               name="category_name"
+               placeholder="e.g. Watches"
+               required>
+    </div>
+
+    <button type="submit"
+            class="btn btn-outline"
+            style="width:100%;">
+        Add Category
+    </button>
+
+</form>
+<div style="margin-top:1rem;">
+    <strong>Available Categories:</strong>
+
+    {% for cat in categories %}
+        <div style="font-size:0.85rem; color:var(--muted);">
+            • {{ cat.name }}
+        </div>
+    {% endfor %}
+</div>
+<hr style="margin:1.5rem 0;">
+        <h3>Add New Product</h3>
+
+        <form action="/admin/add" method="POST">
+
+            <div class="form-group">
+                <label>Product Name</label>
+                <input type="text"
+                       name="name"
+                       required
+                       placeholder="e.g. Wireless Mouse">
+            </div>
+
+            <div class="form-group">
+                <label>Category</label>
+
+                <select name="category" required>
+    <option value="">Select Category</option>
+
+    {% for cat in categories %}
+        <option value="{{ cat.name }}">
+            {{ cat.name }}
+        </option>
+    {% endfor %}
+</select>
+            </div>
+
+            <div class="form-group">
+                <label>Price (₹)</label>
+                <input type="number"
+                       name="price"
+                       step="0.01"
+                       required
+                       placeholder="999.00">
+            </div>
+
+            <div class="form-group">
+                <label>Description</label>
+                <textarea name="description"
+                          placeholder="Short product description..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>Image URL</label>
+                <input type="url"
+                       name="image_url"
+                       placeholder="https://...">
+            </div>
+
+            <button type="submit"
+                    class="btn btn-primary"
+                    style="width:100%; padding:0.8rem;">
+                Add Product
+            </button>
+
+        </form>
+    </div>
+
+</div>
+{% endblock %}
+
+

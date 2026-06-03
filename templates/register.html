@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Register — ShopEase{% endblock %}
+
+{% block extra_css %}
+<style>
+    .auth-container {
+        max-width: 420px;
+        margin: 4rem auto;
+        padding: 2.5rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+    .auth-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .auth-title span {
+        color: var(--accent);
+    }
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+    .form-group label {
+        display: block;
+        font-size: 0.85rem;
+        color: var(--muted);
+        margin-bottom: 0.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .form-group input {
+        width: 100%;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.8rem 1.1rem;
+        color: var(--text);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.95rem;
+        outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .form-group input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(232, 197, 71, 0.1);
+    }
+    .auth-footer {
+        text-align: center;
+        margin-top: 2rem;
+        font-size: 0.9rem;
+        color: var(--muted);
+    }
+    .auth-footer a {
+        color: var(--accent);
+        font-weight: 500;
+        transition: color 0.2s;
+    }
+    .auth-footer a:hover {
+        color: #f0d060;
+        text-decoration: underline;
+    }
+    .flash-messages {
+        margin-bottom: 1.5rem;
+    }
+    .flash-message {
+        padding: 0.8rem 1rem;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+    }
+    .flash-message.error {
+        background: rgba(255, 68, 68, 0.15);
+        color: #ff6666;
+        border: 1px solid rgba(255, 68, 68, 0.3);
+    }
+    .flash-message.success {
+        background: rgba(46, 204, 113, 0.15);
+        color: #2ecc71;
+        border: 1px solid rgba(46, 204, 113, 0.3);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="/" style="color: var(--muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; transition: color 0.2s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+    </svg>
+    Back to Products
+</a>
+
+<div class="auth-container" style="margin-top: 1rem;">
+    <h1 class="auth-title">Register <span>Account</span></h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-messages">
+          {% for category, message in messages %}
+            <div class="flash-message {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <form action="{{ url_for('register') }}" method="POST">
+
+<div class="form-group">
+    <label for="username">Username</label>
+    <input
+        type="text"
+        id="username"
+        name="username"
+        required
+        autocomplete="username"
+        placeholder="Choose a username">
+</div>
+
+<div class="form-group">
+    <label for="email">Email Address</label>
+    <input
+        type="email"
+        id="email"
+        name="email"
+        required
+        autocomplete="email"
+        placeholder="Enter your email address">
+</div>
+
+<div class="form-group">
+    <label for="phone">Phone Number</label>
+    <input
+        type="tel"
+        id="phone"
+        name="phone"
+        required
+        autocomplete="tel"
+        placeholder="Enter your phone number">
+</div>
+
+<div class="form-group">
+    <label for="password">Password</label>
+    <input
+        type="password"
+        id="password"
+        name="password"
+        required
+        autocomplete="new-password"
+        placeholder="Choose a secure password">
+</div>
+
+<div class="form-group">
+    <label for="confirm_password">Confirm Password</label>
+    <input
+        type="password"
+        id="confirm_password"
+        name="confirm_password"
+        required
+        autocomplete="new-password"
+        placeholder="Confirm your password">
+</div>
+
+<div class="show-password-container"
+     style="margin-top:-0.5rem;
+            margin-bottom:1.5rem;
+            display:flex;
+            align-items:center;
+            gap:0.5rem;">
+
+    <input
+        type="checkbox"
+        id="show-password"
+        style="width:auto;
+               cursor:pointer;
+               transform:scale(1.1);">
+
+    <label
+        for="show-password"
+        style="font-size:0.85rem;
+               color:var(--muted);
+               cursor:pointer;
+               user-select:none;">
+        Show Password
+    </label>
+</div>
+
+<button
+    type="submit"
+    class="btn btn-primary"
+    style="width:100%;
+           padding:0.9rem;
+           font-size:1rem;
+           margin-top:0.5rem;">
+    Register
+</button>
+
+
+</form>
+
+    <div class="auth-footer">
+        Already have an account? <a href="{{ url_for('login') }}">Sign In here</a>
+    </div>
+</div>
+
+<script>
+    document.getElementById('show-password').addEventListener('change', function() {
+        const passwordInput = document.getElementById('password');
+        passwordInput.type = this.checked ? 'text' : 'password';
+    });
+</script>
+{% endblock %}

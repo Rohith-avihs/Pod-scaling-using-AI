@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Cart — ShopEase{% endblock %}
+
+{% block extra_css %}
+<style>
+    .cart-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        margin-bottom: 2rem;
+    }
+    .cart-table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
+    .cart-table th {
+        text-align: left;
+        padding: 0.8rem 1rem;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .cart-table td {
+        padding: 1rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+    }
+    .cart-table img { width: 60px; height: 60px; object-fit: cover; border-radius: 8px; }
+    .item-name { font-weight: 500; }
+    .cart-summary {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem;
+        max-width: 360px;
+        margin-left: auto;
+    }
+    .cart-summary .total-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.6rem 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.95rem;
+    }
+    .cart-summary .grand-total {
+        display: flex;
+        justify-content: space-between;
+        padding: 1rem 0 1.2rem;
+        font-family: 'Playfair Display', serif;
+        font-size: 1.3rem;
+        color: var(--accent);
+    }
+    .empty-cart { text-align: center; padding: 4rem; color: var(--muted); }
+    .empty-cart a { color: var(--accent); }
+
+    @media (max-width: 600px) {
+        .cart-summary {
+            max-width: 100%;
+            margin-left: 0;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="cart-title">Your Cart</h1>
+
+{% if products %}
+<div style="width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 2rem;">
+<table class="cart-table">
+    <thead>
+        <tr>
+            <th>Product</th>
+            <th>Name</th>
+            <th>Price</th>
+            <th>Qty</th>
+            <th>Subtotal</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in products %}
+        <tr>
+            <td><img src="{{ p.image_url or 'https://via.placeholder.com/60?text=?' }}" alt="{{ p.name }}"></td>
+            <td class="item-name">{{ p.name }}</td>
+            <td>₹{{ "%.2f"|format(p.price) }}</td>
+            <td>
+    <div style="display:flex;align-items:center;gap:8px;">
+
+        <a href="/cart/decrease/{{ p.id }}"
+           class="btn btn-outline"
+           style="padding:2px 8px;">
+            -
+        </a>
+
+        <span>{{ p.quantity }}</span>
+
+        <a href="/cart/increase/{{ p.id }}"
+           class="btn btn-outline"
+           style="padding:2px 8px;">
+            +
+        </a>
+
+    </div>
+</td>
+            <td>
+    {{ p.quantity }} × ₹{{ "%.2f"|format(p.price) }}
+    <br>
+    <strong>₹{{ "%.2f"|format(p.subtotal) }}</strong>
+</td>
+            <td><a href="/cart/remove/{{ p.id }}" class="btn btn-danger" style="padding:0.3rem 0.8rem; font-size:0.8rem;">Remove</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div class="cart-summary">
+    <div class="total-row"><span>Subtotal</span><span>₹{{ "%.2f"|format(total) }}</span></div>
+    <div class="total-row"><span>Shipping</span><span>Free</span></div>
+    <div class="grand-total"><span>Total</span><span>₹{{ "%.2f"|format(total) }}</span></div>
+    <a href="/checkout" class="btn btn-primary" style="width:100%; text-align:center; display:block; font-size:1rem; padding:0.8rem;">Proceed to Checkout</a>
+</div>
+
+{% else %}
+<div class="empty-cart">
+    <div style="width: 80px; height: 80px; margin: 0 auto 1.5rem; border: 2px dashed var(--border); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; font-weight: 500; color: var(--muted); text-transform: uppercase;">Empty</div>
+    <p>Your cart is empty. <a href="/">Start shopping</a>.</p>
+</div>
+{% endif %}
+{% endblock %}

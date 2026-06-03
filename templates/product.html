@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }} — ShopEase{% endblock %}
+
+{% block extra_css %}
+<style>
+    .product-detail {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3rem;
+        margin-top: 2rem;
+    }
+    .product-detail img {
+        width: 100%;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+    }
+    .product-info h1 {
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        margin-bottom: 1rem;
+    }
+    .product-price {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.2rem;
+        color: var(--accent);
+        margin-bottom: 1.5rem;
+    }
+    .product-price::before { content: '₹'; font-size: 1.2rem; }
+    .product-desc {
+        color: var(--muted);
+        line-height: 1.7;
+        margin-bottom: 2rem;
+    }
+    .actions { display: flex; gap: 1rem; }
+    @media (max-width: 700px) {
+        .product-detail { grid-template-columns: 1fr; gap: 1.5rem; }
+        .actions { flex-direction: column; gap: 0.8rem; }
+        .actions form, .actions a { width: 100%; }
+        .actions .btn { width: 100%; text-align: center; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="/" style="color: var(--muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; transition: color 0.2s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+    </svg>
+    Back to Products
+</a>
+
+<div class="product-detail">
+    <div>
+        <img src="{{ product.image_url or 'https://via.placeholder.com/600x400?text=No+Image' }}" alt="{{ product.name }}">
+    </div>
+    <div class="product-info">
+        <h1>{{ product.name }}</h1>
+        <div class="product-price">{{ "%.2f"|format(product.price) }}</div>
+        <p class="product-desc">{{ product.description or 'No description available.' }}</p>
+        <div class="actions">
+            <form action="/cart/add/{{ product.id }}" method="POST">
+                <button type="submit" class="btn btn-primary" style="font-size:1rem; padding: 0.8rem 2rem;">Add to Cart</button>
+            </form>
+            <a href="/cart" class="btn btn-outline" style="font-size:1rem; padding: 0.8rem 2rem;">View Cart</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

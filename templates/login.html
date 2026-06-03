@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Sign In — ShopEase{% endblock %}
+
+{% block extra_css %}
+
+<style>
+    .auth-container {
+        max-width: 420px;
+        margin: 4rem auto;
+        padding: 2.5rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: 0 8px 32px rgba(0,0,0,.4);
+    }
+
+    .auth-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+
+    .auth-title span {
+        color: var(--accent);
+    }
+
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+
+    .form-group label {
+        display: block;
+        font-size: .85rem;
+        color: var(--muted);
+        margin-bottom: .5rem;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+    }
+
+    .form-group input {
+        width: 100%;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: .8rem 1.1rem;
+        color: var(--text);
+        font-family: 'DM Sans', sans-serif;
+        font-size: .95rem;
+        outline: none;
+        transition: .2s;
+    }
+
+    .form-group input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(232,197,71,.1);
+    }
+
+    .auth-footer {
+        text-align: center;
+        margin-top: 2rem;
+        font-size: .9rem;
+        color: var(--muted);
+    }
+
+    .auth-footer a {
+        color: var(--accent);
+        font-weight: 500;
+    }
+
+    .flash-messages {
+        margin-bottom: 1.5rem;
+    }
+
+    .flash-message {
+        padding: .8rem 1rem;
+        border-radius: 6px;
+        margin-bottom: .5rem;
+    }
+
+    .flash-message.error {
+        background: rgba(255,68,68,.15);
+        color: #ff6666;
+    }
+
+    .flash-message.success {
+        background: rgba(46,204,113,.15);
+        color: #2ecc71;
+    }
+
+    .extra-links {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 1rem;
+        font-size: .85rem;
+    }
+
+    .extra-links a {
+        color: var(--accent);
+    }
+</style>
+
+{% endblock %}
+
+{% block content %}
+
+<a href="/" style="color: var(--muted); font-size:0.9rem;">
+    ← Back to Products
+</a>
+
+<div class="auth-container">
+
+<h1 class="auth-title">
+    Sign <span>In</span>
+</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        <div class="flash-messages">
+            {% for category, message in messages %}
+                <div class="flash-message {{ category }}">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+{% endwith %}
+
+<form action="{{ url_for('login', next=request.args.get('next','')) }}" method="POST">
+
+    <div class="form-group">
+        <label for="username">
+            Username / Email / Phone
+        </label>
+
+        <input
+            type="text"
+            id="username"
+            name="username"
+            required
+            autocomplete="username"
+            placeholder="Enter username, email or phone">
+    </div>
+
+    <div class="form-group">
+        <label for="password">
+            Password
+        </label>
+
+        <input
+            type="password"
+            id="password"
+            name="password"
+            required
+            autocomplete="current-password"
+            placeholder="Enter your password">
+    </div>
+
+    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">
+        <input
+            type="checkbox"
+            id="show-password"
+            style="width:auto;">
+        <label for="show-password">
+            Show Password
+        </label>
+    </div>
+
+    <button
+        type="submit"
+        class="btn btn-primary"
+        style="width:100%;padding:.9rem;">
+        Sign In
+    </button>
+
+    <!-- Future OTP Login -->
+    <button
+        type="button"
+        class="btn"
+        style="width:100%;margin-top:.75rem;">
+        Login with OTP (Coming Soon)
+    </button>
+
+</form>
+
+<div class="extra-links">
+    <a href="#">Forgot Password?</a>
+    <a href="#">Verify Email</a>
+</div>
+
+<div class="auth-footer">
+    Don't have an account?
+    <a href="{{ url_for('register') }}">
+        Register here
+    </a>
+</div>
+
+</div>
+
+<script>
+document.getElementById('show-password').addEventListener('change', function () {
+    const password = document.getElementById('password');
+    password.type = this.checked ? 'text' : 'password';
+});
+</script>
+
+{% endblock %}
+
