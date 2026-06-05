@@ -1,0 +1,8 @@
+cloud/
+__pycache__/
+*.pyc
+*.pth
+{templates,static
+README.md
+schema.sql
+deployment.yaml

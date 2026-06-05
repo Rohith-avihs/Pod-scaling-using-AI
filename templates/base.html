@@ -186,5 +186,121 @@
         {% block content %}{% endblock %}
     </main>
     <footer>© 2026 ShopEase — Professional E-Commerce Experience</footer>
+    
+    {% if 'user_id' in session %}
+    <script>
+        (function() {
+            // Broadcast channel to sync logouts
+            let logoutChannel;
+            try {
+                logoutChannel = new BroadcastChannel('logout_channel');
+                logoutChannel.onmessage = function(e) {
+                    if (e.data === 'logout') {
+                        window.location.reload();
+                    }
+                };
+            } catch(e) {}
+
+            // Generate/retrieve tab-specific identifier
+            let tabId = sessionStorage.getItem('tab_id');
+            if (!tabId) {
+                tabId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+                sessionStorage.setItem('tab_id', tabId);
+            }
+
+            // Helper to get active tabs list from localStorage
+            function getActiveTabs() {
+                try {
+                    return JSON.parse(localStorage.getItem('active_tabs') || '{}');
+                } catch (e) {
+                    return {};
+                }
+            }
+
+            // Helper to save active tabs
+            function saveActiveTabs(tabs) {
+                localStorage.setItem('active_tabs', JSON.stringify(tabs));
+            }
+
+            // Check if there was a pending logout that needs to be actioned.
+            let pendingTime = localStorage.getItem('pending_logout');
+            if (pendingTime) {
+                let timeDiff = Date.now() - parseInt(pendingTime, 10);
+                if (timeDiff > 2000) {
+                    localStorage.removeItem('pending_logout');
+                    if (logoutChannel) {
+                        try { logoutChannel.postMessage('logout'); } catch(e) {}
+                    }
+                    window.location.href = "{{ url_for('logout') }}";
+                    return;
+                } else {
+                    localStorage.removeItem('pending_logout');
+                }
+            }
+
+            // Register current tab
+            let tabs = getActiveTabs();
+            tabs[tabId] = Date.now();
+            saveActiveTabs(tabs);
+
+            // Periodic heartbeat to refresh current tab timestamp and clean up crashed tabs
+            setInterval(function() {
+                let currentTabs = getActiveTabs();
+                let now = Date.now();
+                let changed = false;
+                for (let tid in currentTabs) {
+                    if (tid === tabId) {
+                        currentTabs[tid] = now;
+                        changed = true;
+                    } else if (now - currentTabs[tid] > 10000) { // Prune tabs inactive for > 10s
+                        delete currentTabs[tid];
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    saveActiveTabs(currentTabs);
+                }
+            }, 3000);
+
+            // On tab unload (reload, navigation, or closure)
+            window.addEventListener('beforeunload', function() {
+                let currentTabs = getActiveTabs();
+                delete currentTabs[tabId];
+                saveActiveTabs(currentTabs);
+
+                // If zero active tabs remain, schedule a pending logout
+                let remaining = Object.keys(currentTabs).length;
+                if (remaining === 0) {
+                    localStorage.setItem('pending_logout', Date.now());
+                }
+            });
+
+            // Periodically check if another tab has written a pending logout (or we missed it)
+            setInterval(function() {
+                let checkTime = localStorage.getItem('pending_logout');
+                if (checkTime) {
+                    let now = Date.now();
+                    if (now - parseInt(checkTime, 10) > 2000) {
+                        localStorage.removeItem('pending_logout');
+                        if (logoutChannel) {
+                            try { logoutChannel.postMessage('logout'); } catch(e) {}
+                        }
+                        window.location.href = "{{ url_for('logout') }}";
+                    }
+                }
+            }, 1000);
+        })();
+    </script>
+    {% else %}
+    <script>
+        // Clear active tab tracking and pending logouts if not logged in
+        localStorage.removeItem('active_tabs');
+        localStorage.removeItem('pending_logout');
+        try {
+            const logoutChannel = new BroadcastChannel('logout_channel');
+            logoutChannel.postMessage('logout');
+        } catch(e) {}
+    </script>
+    {% endif %}
 </body>
 </html>

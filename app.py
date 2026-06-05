@@ -7,6 +7,12 @@ import os
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key_here')
 
+# Session cookie security configurations
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+
 def get_db():
     return mysql.connector.connect(
         host=os.getenv('DB_HOST', 'localhost'),

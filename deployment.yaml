@@ -4,21 +4,26 @@ metadata:
   name: shopease
 spec:
   replicas: 2
-
   selector:
     matchLabels:
       app: shopease
-
   template:
     metadata:
       labels:
         app: shopease
-
     spec:
       containers:
       - name: shopease
-        image: shopease:latest
-        imagePullPolicy: Never
-
+        image: 217266131527.dkr.ecr.ap-south-1.amazonaws.com/shopease:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "mysql-service"
+        - name: DB_USER
+          value: "root"
+        - name: DB_PASSWORD
+          value: "yourpassword"
+        - name: DB_NAME
+          value: "ecommerce"
