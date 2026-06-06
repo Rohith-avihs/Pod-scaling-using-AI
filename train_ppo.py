@@ -1,0 +1,159 @@
+import torch
+import torch.nn as nn
+import subprocess
+import time
+import random
+
+# ── Architecture (matches saved model) ────────────────────────────────────────
+class TransformerFeatureExtractor(nn.Module):
+    def __init__(self, input_dim=6, d_model=64, nhead=4, seq_len=20):
+        super().__init__()
+        self.input_projection = nn.Linear(input_dim, d_model)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, seq_len, d_model))
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead,
+            dim_feedforward=128, batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
+
+    def forward(self, x):
+        x = self.input_projection(x)
+        x = x + self.pos_embedding[:, :x.size(1), :]
+        x = self.transformer_encoder(x)
+        return x[:, -1, :]
+
+class PPOActor(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.feature_extractor = TransformerFeatureExtractor()
+        self.actor  = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 5))
+        self.critic = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1))
+
+    def forward(self, x):
+        f = self.feature_extractor(x)
+        return self.actor(f), self.critic(f)
+
+# ── Load model ─────────────────────────────────────────────────────────────────
+model = PPOActor()
+model.load_state_dict(torch.load('k8s_ppo_model.pth', map_location='cpu'))
+model.eval()
+print("✅ PPO Transformer model loaded")
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+MIN_PODS = 1
+MAX_PODS = 4
+SEQ_LEN  = 20
+INTERVAL = 15  # seconds
+ACTION_DELTAS = [-2, -1, 0, 1, 2]
+
+# thresholds for rule-based override
+CPU_HIGH  = 0.75
+CPU_LOW   = 0.20
+MEM_HIGH  = 0.75
+
+history = []
+
+def get_current_pods():
+    result = subprocess.run(
+        ["kubectl", "get", "deployment", "shopease",
+         "-o", "jsonpath={.spec.replicas}"],
+        capture_output=True, text=True
+    )
+    try:
+        return int(result.stdout.strip())
+    except:
+        return 2
+
+def scale_pods(n):
+    n = max(MIN_PODS, min(MAX_PODS, n))
+    subprocess.run(
+        ["kubectl", "scale", "deployment", "shopease", f"--replicas={n}"],
+        capture_output=True
+    )
+    return n
+
+def get_metrics(pods):
+    """Simulate metrics — replace with Prometheus later"""
+    # cycle: low → medium → high every 3 steps
+    t = int(time.time() / INTERVAL) % 9
+    if t < 3:    # low load
+        cpu = random.uniform(0.05, 0.20)
+        mem = random.uniform(0.05, 0.25)
+        rps = random.uniform(0.02, 0.15)
+    elif t < 6:  # medium load
+        cpu = random.uniform(0.30, 0.60)
+        mem = random.uniform(0.30, 0.55)
+        rps = random.uniform(0.30, 0.60)
+    else:        # high load
+        cpu = random.uniform(0.75, 0.99)
+        mem = random.uniform(0.70, 0.90)
+        rps = random.uniform(0.75, 1.00)
+
+    rt  = max(0.01, min(1.0, cpu / max(pods, 1) * 0.8))
+    err = max(0.0,  min(1.0, cpu - 0.85)) if cpu > 0.85 else 0.0
+    return [pods / MAX_PODS, cpu, mem, rps, rt, err]
+
+def rule_based_action(metrics):
+    """Fallback rule-based scaling"""
+    _, cpu, mem, rps, rt, err = metrics
+    if cpu > CPU_HIGH or mem > MEM_HIGH:
+        return 3   # scale +1
+    elif cpu < CPU_LOW and mem < 0.25:
+        return 1   # scale -1
+    else:
+        return 2   # keep same
+
+def ppo_action(metrics):
+    """Get action from PPO Transformer model"""
+    global history
+    history.append(metrics)
+    if len(history) > SEQ_LEN:
+        history.pop(0)
+    padded = history.copy()
+    while len(padded) < SEQ_LEN:
+        padded.insert(0, [0.0] * 6)
+    x = torch.tensor([padded], dtype=torch.float32)
+    with torch.no_grad():
+        logits, _ = model(x)
+        probs = torch.softmax(logits, dim=-1)
+        action = torch.argmax(logits).item()
+    return action, probs.numpy()[0]
+
+print(f"\n🚀 Autoscaler running — interval: {INTERVAL}s")
+print(f"   Pods range: {MIN_PODS}–{MAX_PODS}")
+print("-" * 65)
+
+step = 0
+while True:
+    step += 1
+    pods = get_current_pods()
+    metrics = get_metrics(pods)
+    _, cpu, mem, rps, rt, err = metrics
+
+    # get PPO decision
+    ppo_act, probs = ppo_action(metrics)
+    ppo_delta = ACTION_DELTAS[ppo_act]
+
+    # get rule-based decision
+    rule_act = rule_based_action(metrics)
+    rule_delta = ACTION_DELTAS[rule_act]
+
+    # use rule-based for actual scaling (reliable), log both
+    final_delta = rule_delta
+    new_pods = pods + final_delta
+
+    load_level = "🔴 HIGH" if cpu > 0.75 else "🟡 MED" if cpu > 0.30 else "🟢 LOW"
+
+    print(f"\n[Step {step:3d}] {load_level}")
+    print(f"  Metrics : pods={pods} cpu={cpu:.0%} mem={mem:.0%} rps={rps:.0%}")
+    print(f"  PPO     : action={ACTION_DELTAS[ppo_act]:+d} | probs={probs.round(2)}")
+    print(f"  Rule    : action={rule_delta:+d}")
+    print(f"  Decision: {pods} → {max(MIN_PODS, min(MAX_PODS, new_pods))} pods")
+
+    if final_delta != 0:
+        scaled = scale_pods(new_pods)
+        print(f"  ✅ Scaled to {scaled} pods")
+    else:
+        print(f"  ➡️  No change")
+
+    time.sleep(INTERVAL)
