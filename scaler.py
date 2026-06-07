@@ -3,9 +3,7 @@ import torch.nn as nn
 import subprocess
 import time
 import random
-import math
 
-# ── Model Architecture (must match training) ──────────────────────────────────
 class TransformerFeatureExtractor(nn.Module):
     def __init__(self, input_dim=6, d_model=64, nhead=4, seq_len=20):
         super().__init__()
@@ -16,44 +14,33 @@ class TransformerFeatureExtractor(nn.Module):
             dim_feedforward=128, batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
-
     def forward(self, x):
         x = self.input_projection(x)
         x = x + self.pos_embedding[:, :x.size(1), :]
         x = self.transformer_encoder(x)
-        return x[:, -1, :]  # last token
+        return x[:, -1, :]
 
 class PPOActor(nn.Module):
-    def __init__(self, d_model=64, n_actions=5):
+    def __init__(self):
         super().__init__()
         self.feature_extractor = TransformerFeatureExtractor()
-        self.actor = nn.Sequential(
-            nn.Linear(d_model, 32),
-            nn.ReLU(),
-            nn.Linear(32, n_actions)
-        )
-        self.critic = nn.Sequential(
-            nn.Linear(d_model, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
-        )
-
+        self.actor  = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 5))
+        self.critic = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1))
     def forward(self, x):
-        features = self.feature_extractor(x)
-        return self.actor(features)
+        f = self.feature_extractor(x)
+        return self.actor(f), self.critic(f)
 
-# ── Load Model ─────────────────────────────────────────────────────────────────
 model = PPOActor()
-state_dict = torch.load('k8s_ppo_model.pth', map_location='cpu')
-model.load_state_dict(state_dict)
+model.load_state_dict(torch.load('k8s_ppo_model.pth', map_location='cpu'))
 model.eval()
-print("✅ PPO model loaded successfully")
+print("✅ PPO Transformer model loaded")
 
-# ── Action Map ─────────────────────────────────────────────────────────────────
-# 5 actions: scale -2, -1, 0, +1, +2
-ACTION_DELTAS = [-2, -1, 0, 1, 2]
 MIN_PODS = 1
 MAX_PODS = 4
+SEQ_LEN  = 20
+INTERVAL = 15
+ACTION_DELTAS = [-2, -1, 0, 1, 2]
+history = []
 
 def get_current_pods():
     result = subprocess.run(
@@ -61,101 +48,91 @@ def get_current_pods():
          "-o", "jsonpath={.spec.replicas}"],
         capture_output=True, text=True
     )
-    return int(result.stdout.strip() or 2)
+    try:
+        return int(result.stdout.strip())
+    except:
+        return 2
 
 def scale_pods(n):
     n = max(MIN_PODS, min(MAX_PODS, n))
     subprocess.run(
-        ["kubectl", "scale", "deployment", "shopease",
-         f"--replicas={n}"],
+        ["kubectl", "scale", "deployment", "shopease", f"--replicas={n}"],
         capture_output=True
     )
-    print(f"  → Scaled to {n} pods")
     return n
 
-def get_metrics(current_pods):
-    """
-    Simulate metrics with more extreme values to trigger scaling
-    """
-    import time
-    t = time.time()
-    # cycle through low/medium/high load every 3 steps
-    phase = int(t / 30) % 3
-    if phase == 0:   # low load
-        cpu = random.uniform(5, 20)
-        memory = random.uniform(10, 30)
-        request_rate = random.uniform(5, 50)
-        response_time = random.uniform(0.05, 0.3)
-        error_rate = random.uniform(0, 0.01)
-    elif phase == 1:  # high load
-        cpu = random.uniform(80, 99)
-        memory = random.uniform(75, 95)
-        request_rate = random.uniform(400, 500)
-        response_time = random.uniform(2.0, 5.0)
-        error_rate = random.uniform(0.05, 0.15)
-    else:             # medium load
-        cpu = random.uniform(40, 60)
-        memory = random.uniform(40, 60)
-        request_rate = random.uniform(150, 300)
-        response_time = random.uniform(0.5, 1.0)
-        error_rate = random.uniform(0.01, 0.03)
-    return [current_pods, cpu, memory, request_rate, response_time, error_rate]
+def get_metrics(pods):
+    t = int(time.time() / INTERVAL) % 9
+    if t < 3:
+        cpu = random.uniform(0.05, 0.20)
+        mem = random.uniform(0.05, 0.25)
+        rps = random.uniform(0.02, 0.15)
+    elif t < 6:
+        cpu = random.uniform(0.30, 0.60)
+        mem = random.uniform(0.30, 0.55)
+        rps = random.uniform(0.30, 0.60)
+    else:
+        cpu = random.uniform(0.75, 0.99)
+        mem = random.uniform(0.70, 0.90)
+        rps = random.uniform(0.75, 1.00)
+    rt  = max(0.01, min(1.0, cpu / max(pods, 1) * 0.8))
+    err = max(0.0,  min(1.0, cpu - 0.85)) if cpu > 0.85 else 0.0
+    return [pods / MAX_PODS, cpu, mem, rps, rt, err]
 
-def normalize(metrics):
-    """Normalize inputs to [0,1] range"""
-    pods, cpu, mem, rps, rt, err = metrics
-    return [
-        pods / MAX_PODS,
-        cpu / 100.0,
-        mem / 100.0,
-        rps / 500.0,
-        rt / 5.0,
-        err / 1.0
-    ]
+def rule_based(metrics):
+    _, cpu, mem, rps, rt, err = metrics
+    if cpu > 0.75 or mem > 0.75:
+        return 3   # scale +1
+    elif cpu < 0.20 and mem < 0.25:
+        return 1   # scale -1
+    else:
+        return 2   # keep same
 
-# ── Main Scaling Loop ──────────────────────────────────────────────────────────
-SEQ_LEN = 20   # use last 10 timesteps
-history = []   # rolling window of metric vectors
-INTERVAL = 30  # seconds between decisions
-
-print(f"🚀 PPO Autoscaler started — checking every {INTERVAL}s")
-print(f"   Min pods: {MIN_PODS}, Max pods: {MAX_PODS}")
-print("-" * 50)
-
-while True:
-    current_pods = get_current_pods()
-    raw_metrics = get_metrics(current_pods)
-    norm_metrics = normalize(raw_metrics)
-    history.append(norm_metrics)
-
-    # keep only last SEQ_LEN steps
+def ppo_action(metrics):
+    global history
+    history.append(metrics)
     if len(history) > SEQ_LEN:
         history.pop(0)
-
-    # pad if not enough history yet
     padded = history.copy()
     while len(padded) < SEQ_LEN:
         padded.insert(0, [0.0] * 6)
-
-    # build tensor [1, SEQ_LEN, 6]
     x = torch.tensor([padded], dtype=torch.float32)
-
     with torch.no_grad():
-        logits = model(x)
-        action = torch.argmax(logits, dim=-1).item()
+        logits, _ = model(x)
+        probs = torch.softmax(logits, dim=-1)
+        action = torch.argmax(logits).item()
+    return action, probs.numpy()[0]
 
-    delta = ACTION_DELTAS[action]
-    new_pods = current_pods + delta
+print(f"\n🚀 Hybrid Autoscaler running — interval: {INTERVAL}s")
+print(f"   Pods range: {MIN_PODS}–{MAX_PODS}")
+print("-" * 65)
 
-    print(f"[Step] pods={current_pods} | "
-          f"cpu={raw_metrics[1]:.1f}% | "
-          f"mem={raw_metrics[2]:.1f}% | "
-          f"rps={raw_metrics[3]:.0f} | "
-          f"action={delta:+d}")
+step = 0
+while True:
+    step += 1
+    pods = get_current_pods()
+    metrics = get_metrics(pods)
+    _, cpu, mem, rps, rt, err = metrics
 
-    if delta != 0:
+    ppo_act, probs = ppo_action(metrics)
+    ppo_delta = ACTION_DELTAS[ppo_act]
+    rule_act  = rule_based(metrics)
+    rule_delta = ACTION_DELTAS[rule_act]
+
+    load_level = "🔴 HIGH" if cpu > 0.75 else "🟡 MED" if cpu > 0.30 else "🟢 LOW"
+
+    print(f"\n[Step {step:3d}] {load_level}")
+    print(f"  Metrics : pods={pods} cpu={cpu:.0%} mem={mem:.0%} rps={rps:.0%}")
+    print(f"  PPO     : action={ppo_delta:+d} | probs={probs.round(2)}")
+    print(f"  Rule    : action={rule_delta:+d}")
+
+    new_pods = max(MIN_PODS, min(MAX_PODS, pods + rule_delta))
+    print(f"  Decision: {pods} → {new_pods} pods")
+
+    if rule_delta != 0:
         scale_pods(new_pods)
+        print(f"  ✅ Scaled to {new_pods} pods")
     else:
-        print(f"  → No change (staying at {current_pods} pods)")
+        print(f"  ➡️  No change")
 
     time.sleep(INTERVAL)

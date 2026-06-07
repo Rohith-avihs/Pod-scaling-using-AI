@@ -5,4 +5,8 @@ __pycache__/
 {templates,static
 README.md
 schema.sql
-deployment.yaml
+mysql-deployment.yaml
+firebase-key.json
+shopease-24-firebase-adminsdk-fbsvc-*.json
+app_mysql_backup.py
+train_ppo.py

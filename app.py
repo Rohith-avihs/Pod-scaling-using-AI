@@ -1,572 +1,324 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
-import mysql.connector
+from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+import firebase_admin
+from firebase_admin import credentials, firestore
 import os
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key_here')
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'shopease_secret_key')
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
 
-# Session cookie security configurations
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
-)
+# ── Firebase Init ──────────────────────────────────────────────────────────────
+if not firebase_admin._apps:
+    cred = credentials.Certificate(os.getenv('FIREBASE_KEY', 'firebase-key.json'))
+    firebase_admin.initialize_app(cred, {'projectId': 'shopease-24'})
+db = firestore.client()
 
-def get_db():
-    return mysql.connector.connect(
-        host=os.getenv('DB_HOST', 'localhost'),
-        user=os.getenv('DB_USER', 'root'),
-        password=os.getenv('DB_PASSWORD', 'password'),
-        database=os.getenv('DB_NAME', 'ecommerce')
-    )
-
-# Decorator to restrict access to logged-in users
+# ── Auth Decorators ────────────────────────────────────────────────────────────
 def login_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated(*args, **kwargs):
         if 'user_id' not in session:
             flash('Please log in to continue.', 'error')
             return redirect(url_for('login', next=request.url))
         return f(*args, **kwargs)
-    return decorated_function
+    return decorated
 
-# Decorator to restrict access to administrators
 def admin_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated(*args, **kwargs):
         if 'user_id' not in session or session.get('role') != 'admin':
             flash('Administrator access required.', 'error')
-            return redirect(url_for('login', next=request.url))
+            return redirect(url_for('login'))
         return f(*args, **kwargs)
-    return decorated_function
+    return decorated
 
-# ---------- REGISTRATION & LOGIN ----------
+# ── Auth Routes ────────────────────────────────────────────────────────────────
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if 'user_id' in session:
         return redirect(url_for('index'))
-
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
-        email = request.form.get('email', '').strip()
-        phone = request.form.get('phone', '').strip()
+        email    = request.form.get('email', '').strip()
+        phone    = request.form.get('phone', '').strip()
         password = request.form.get('password', '').strip()
 
-        if not username or not email or not phone or not password:
+        if not all([username, email, phone, password]):
             flash('All fields are required.', 'error')
             return redirect(url_for('register'))
 
-        db = get_db()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute("""
-            SELECT id
-            FROM users
-            WHERE username=%s
-               OR email=%s
-               OR phone=%s
-        """, (username, email, phone))
-
-        existing_user = cursor.fetchone()
-
-        if existing_user:
-            cursor.close()
-            db.close()
-            flash('Username, email or phone already exists.', 'error')
+        # check existing
+        existing = db.collection('users').where('username', '==', username).limit(1).get()
+        if existing:
+            flash('Username already exists.', 'error')
             return redirect(url_for('register'))
 
-        hashed_password = generate_password_hash(password)
+        existing_email = db.collection('users').where('email', '==', email).limit(1).get()
+        if existing_email:
+            flash('Email already exists.', 'error')
+            return redirect(url_for('register'))
 
-        cursor.execute("""
-            INSERT INTO users
-            (username, email, phone, password, role)
-            VALUES (%s, %s, %s, %s, 'user')
-        """, (
-            username,
-            email,
-            phone,
-            hashed_password
-        ))
-
-        db.commit()
-
-        cursor.close()
-        db.close()
-
+        db.collection('users').add({
+            'username': username,
+            'email': email,
+            'phone': phone,
+            'password': generate_password_hash(password),
+            'role': 'user',
+            'address': '', 'city': '', 'pin': ''
+        })
         flash('Registration successful! Please log in.', 'success')
         return redirect(url_for('login'))
-
     return render_template('register.html')
-    
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-
     if 'user_id' in session:
         return redirect(url_for('index'))
-
     next_page = request.args.get('next', '')
-
     if request.method == 'POST':
-
         login_id = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
 
-        if not login_id or not password:
-            flash(
-                'Username/Email/Phone and password are required.',
-                'error'
-            )
-            return redirect(url_for('login', next=next_page))
+        users = db.collection('users').where('username', '==', login_id).limit(1).get()
+        if not users:
+            users = db.collection('users').where('email', '==', login_id).limit(1).get()
+        if not users:
+            users = db.collection('users').where('phone', '==', login_id).limit(1).get()
 
-        db = get_db()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute("""
-            SELECT *
-            FROM users
-            WHERE username=%s
-               OR email=%s
-               OR phone=%s
-        """, (
-            login_id,
-            login_id,
-            login_id
-        ))
-
-        user = cursor.fetchone()
-
-        cursor.close()
-        db.close()
-
-        if user and check_password_hash(
-            user['password'],
-            password
-        ):
-
-            session['user_id'] = user['id']
-            session['username'] = user['username']
-            session['role'] = user['role']
-
-            flash(
-                f"Welcome back, {user['username']}!",
-                'success'
-            )
-
-            if next_page:
-                return redirect(next_page)
-
-            return redirect(url_for('index'))
+        if users:
+            user_doc = users[0]
+            user = user_doc.to_dict()
+            if check_password_hash(user['password'], password):
+                session['user_id'] = user_doc.id
+                session['username'] = user['username']
+                session['role'] = user.get('role', 'user')
+                flash(f"Welcome back, {user['username']}!", 'success')
+                return redirect(next_page or url_for('index'))
 
         flash('Invalid credentials.', 'error')
         return redirect(url_for('login', next=next_page))
-
     return render_template('login.html')
-    
+
 @app.route('/logout')
 def logout():
     session.clear()
-    flash('You have logged out successfully.', 'success')
+    flash('Logged out successfully.', 'success')
     return redirect(url_for('index'))
 
-# ---------- HOME WITH SEARCH, FILTER & SORTING ----------
+# ── Home ───────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     search_query = request.args.get('search', '').strip()
-    min_price = request.args.get('min_price', '').strip()
-    max_price = request.args.get('max_price', '').strip()
-    sort_by = request.args.get('sort', '').strip()
-    category = request.args.get('category', '').strip()
+    category     = request.args.get('category', '').strip()
+    min_price    = request.args.get('min_price', '').strip()
+    max_price    = request.args.get('max_price', '').strip()
+    sort_by      = request.args.get('sort', '').strip()
 
-    query = "SELECT * FROM products"
-    where_clauses = []
-    query_params = []
-
-    if search_query:
-        where_clauses.append("(name LIKE %s OR description LIKE %s)")
-        search_param = f"%{search_query}%"
-        query_params.extend([search_param, search_param])
-
-    if min_price:
-        try:
-            where_clauses.append("price >= %s")
-            query_params.append(float(min_price))
-        except ValueError:
-            pass
-
-    if max_price:
-        try:
-            where_clauses.append("price <= %s")
-            query_params.append(float(max_price))
-        except ValueError:
-            pass
-    
+    products_ref = db.collection('products')
     if category:
-        where_clauses.append("category = %s")
-        query_params.append(category)
-    
-    if where_clauses:
-        query += " WHERE " + " AND ".join(where_clauses)
+        products_ref = products_ref.where('category', '==', category)
+    docs = products_ref.get()
 
-    sort_options = {
-        "price_asc": "ORDER BY price ASC",
-        "price_desc": "ORDER BY price DESC",
-        "name_asc": "ORDER BY name ASC",
-        "name_desc": "ORDER BY name DESC"
-    }
-    if sort_by in sort_options:
-        query += " " + sort_options[sort_by]
-    else:
-        query += " ORDER BY id DESC"
+    products = []
+    for doc in docs:
+        p = doc.to_dict()
+        p['id'] = doc.id
+        if search_query and search_query.lower() not in p['name'].lower():
+            continue
+        if min_price:
+            try:
+                if p['price'] < float(min_price): continue
+            except: pass
+        if max_price:
+            try:
+                if p['price'] > float(max_price): continue
+            except: pass
+        products.append(p)
 
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(query, tuple(query_params))
-    products = cursor.fetchall()
-    cursor.execute("""
-        SELECT name AS category
-        FROM categories
-        ORDER BY name
-    """)
+    if sort_by == 'price_asc':
+        products.sort(key=lambda x: x['price'])
+    elif sort_by == 'price_desc':
+        products.sort(key=lambda x: x['price'], reverse=True)
+    elif sort_by == 'name_asc':
+        products.sort(key=lambda x: x['name'])
 
-    categories = cursor.fetchall()
-    cursor.close()
-    db.close()
-    
-    return render_template(
-        'index.html',
-        products=products,
-        categories=categories,
-        search_query=search_query,
-        min_price=min_price,
-        max_price=max_price,
-        sort_by=sort_by,
-        category=category
-)
+    categories = [doc.to_dict() for doc in db.collection('categories').get()]
+    return render_template('index.html', products=products, categories=categories,
+                           search_query=search_query, min_price=min_price,
+                           max_price=max_price, sort_by=sort_by, category=category)
 
-# ---------- PRODUCT DETAIL ----------
-@app.route('/product/<int:product_id>')
+# ── Product Detail ─────────────────────────────────────────────────────────────
+@app.route('/product/<product_id>')
 def product(product_id):
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM products WHERE id = %s", (product_id,))
-    product = cursor.fetchone()
-    cursor.close()
-    db.close()
-    if not product:
+    doc = db.collection('products').document(product_id).get()
+    if not doc.exists:
         return redirect(url_for('index'))
-    return render_template('product.html', product=product)
+    p = doc.to_dict()
+    p['id'] = doc.id
+    return render_template('product.html', product=p)
 
-# ---------- CART ----------
+# ── Cart ───────────────────────────────────────────────────────────────────────
 @app.route('/cart')
 def cart():
-    products = []
-    total = 0
-    
+    products, total = [], 0
     if 'user_id' in session:
-        db = get_db()
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT p.*, c.quantity, (p.price * c.quantity) as subtotal
-            FROM cart_items c
-            JOIN products p ON c.product_id = p.id
-            WHERE c.user_id = %s
-        """, (session['user_id'],))
-        products = cursor.fetchall()
-        total = sum(p['subtotal'] for p in products)
-        cursor.close()
-        db.close()
+        cart_docs = db.collection('users').document(session['user_id'])\
+                      .collection('cart').get()
+        for item in cart_docs:
+            c = item.to_dict()
+            p_doc = db.collection('products').document(c['product_id']).get()
+            if p_doc.exists:
+                p = p_doc.to_dict()
+                p['id'] = p_doc.id
+                p['quantity'] = c['quantity']
+                p['subtotal'] = p['price'] * c['quantity']
+                total += p['subtotal']
+                products.append(p)
     else:
         cart_items = session.get('cart', {})
-        db = get_db()
-        cursor = db.cursor(dictionary=True)
         for pid, qty in cart_items.items():
-            cursor.execute("SELECT * FROM products WHERE id = %s", (int(pid),)) # Fixed string to int conversion
-            p = cursor.fetchone()
-            if p:
+            p_doc = db.collection('products').document(pid).get()
+            if p_doc.exists:
+                p = p_doc.to_dict()
+                p['id'] = p_doc.id
                 p['quantity'] = qty
                 p['subtotal'] = p['price'] * qty
                 total += p['subtotal']
                 products.append(p)
-        cursor.close()
-        db.close()
-        
     return render_template('cart.html', products=products, total=total)
 
-@app.route('/cart/add/<int:product_id>', methods=['POST'])
+@app.route('/cart/add/<product_id>', methods=['POST'])
 def add_to_cart(product_id):
     if 'user_id' in session:
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute("""
-            INSERT INTO cart_items (user_id, product_id, quantity)
-            VALUES (%s, %s, 1)
-            ON DUPLICATE KEY UPDATE quantity = quantity + 1
-        """, (session['user_id'], product_id))
-        db.commit()
-        cursor.close()
-        db.close()
+        cart_ref = db.collection('users').document(session['user_id'])\
+                     .collection('cart').document(product_id)
+        doc = cart_ref.get()
+        if doc.exists:
+            cart_ref.update({'quantity': doc.to_dict()['quantity'] + 1})
+        else:
+            cart_ref.set({'product_id': product_id, 'quantity': 1})
     else:
         cart = session.get('cart', {})
-        key = str(product_id)
-        cart[key] = cart.get(key, 0) + 1
+        cart[product_id] = cart.get(product_id, 0) + 1
         session['cart'] = cart
-        
     flash('Item added to cart.', 'success')
     return redirect(url_for('cart'))
 
-@app.route('/cart/remove/<int:product_id>')
+@app.route('/cart/remove/<product_id>')
 def remove_from_cart(product_id):
     if 'user_id' in session:
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute("DELETE FROM cart_items WHERE user_id = %s AND product_id = %s", (session['user_id'], product_id))
-        db.commit()
-        cursor.close()
-        db.close()
+        db.collection('users').document(session['user_id'])\
+          .collection('cart').document(product_id).delete()
     else:
         cart = session.get('cart', {})
-        cart.pop(str(product_id), None)
+        cart.pop(product_id, None)
         session['cart'] = cart
-        
-    flash('Item removed from cart.', 'success')
+    flash('Item removed.', 'success')
     return redirect(url_for('cart'))
 
-# ---------- CHECKOUT ----------
+@app.route('/cart/increase/<product_id>')
+@login_required
+def increase_cart(product_id):
+    cart_ref = db.collection('users').document(session['user_id'])\
+                 .collection('cart').document(product_id)
+    doc = cart_ref.get()
+    if doc.exists:
+        cart_ref.update({'quantity': doc.to_dict()['quantity'] + 1})
+    return redirect(url_for('cart'))
+
+@app.route('/cart/decrease/<product_id>')
+@login_required
+def decrease_cart(product_id):
+    cart_ref = db.collection('users').document(session['user_id'])\
+                 .collection('cart').document(product_id)
+    doc = cart_ref.get()
+    if doc.exists:
+        qty = doc.to_dict()['quantity']
+        if qty > 1:
+            cart_ref.update({'quantity': qty - 1})
+        else:
+            cart_ref.delete()
+    return redirect(url_for('cart'))
+
+# ── Checkout ───────────────────────────────────────────────────────────────────
 @app.route('/checkout', methods=['GET', 'POST'])
 @login_required
 def checkout():
     user_id = session['user_id']
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-    
     if request.method == 'POST':
-        email = request.form.get('email', '').strip()
-        phone = request.form.get('phone', '').strip()
-        address = request.form.get('address', '').strip()
-        city = request.form.get('city', '').strip()
-        pin = request.form.get('pin', '').strip()
+        db.collection('users').document(user_id).update({
+            'email':   request.form.get('email', ''),
+            'phone':   request.form.get('phone', ''),
+            'address': request.form.get('address', ''),
+            'city':    request.form.get('city', ''),
+            'pin':     request.form.get('pin', ''),
+        })
+        cart_docs = db.collection('users').document(user_id).collection('cart').get()
+        for doc in cart_docs:
+            doc.reference.delete()
+        return redirect(url_for('order_success'))
 
-        cursor.execute("""
-            UPDATE users
-            SET email = %s,
-                phone = %s,
-                address = %s,
-                city = %s,
-                pin = %s
-            WHERE id = %s
-        """, (
-            email,
-            phone,
-            address,
-            city,
-            pin,
-            user_id
-        ))
+    cart_docs = db.collection('users').document(user_id).collection('cart').get()
+    total = 0
+    for item in cart_docs:
+        c = item.to_dict()
+        p_doc = db.collection('products').document(c['product_id']).get()
+        if p_doc.exists:
+            total += p_doc.to_dict()['price'] * c['quantity']
 
-        db.commit()
-        
-        cursor.execute("DELETE FROM cart_items WHERE user_id = %s", (user_id,))
-        db.commit()
-        
-        cursor.close()
-        db.close()
-        return redirect(url_for('order_success')) # Post/Redirect/Get Pattern optimization
-        
-    # --- GET REQUEST HANDLING ---
-    cursor.execute("""
-        SELECT SUM(p.price * c.quantity) as total
-        FROM cart_items c
-        JOIN products p ON c.product_id = p.id
-        WHERE c.user_id = %s
-    """, (user_id,))
-    result = cursor.fetchone()
-    total = result['total'] if result and result['total'] else 0
-    
     if total == 0:
-        cursor.close()
-        db.close()
         flash('Your cart is empty.', 'error')
         return redirect(url_for('cart'))
-        
-    cursor.execute("""
-    SELECT
-        username,
-        email,
-        phone,
-        address,
-        city,
-        pin
-    FROM users
-    WHERE id = %s
-""", (user_id,))
-    user_profile = cursor.fetchone()
-    
-    cursor.close()
-    db.close()
-    
+
+    user_doc = db.collection('users').document(user_id).get()
+    user_profile = user_doc.to_dict() if user_doc.exists else {}
     return render_template('checkout.html', total=total, user_profile=user_profile)
-@app.route('/cart/increase/<int:product_id>')
-@login_required
-def increase_cart(product_id):
 
-    if 'user_id' in session:
-        db = get_db()
-        cursor = db.cursor()
-
-        cursor.execute("""
-            UPDATE cart_items
-            SET quantity = quantity + 1
-            WHERE user_id = %s
-              AND product_id = %s
-        """, (session['user_id'], product_id))
-
-        db.commit()
-        cursor.close()
-        db.close()
-
-    return redirect(url_for('cart'))
-@app.route('/cart/decrease/<int:product_id>')
-@login_required
-def decrease_cart(product_id):
-
-    if 'user_id' in session:
-
-        db = get_db()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute("""
-            SELECT quantity
-            FROM cart_items
-            WHERE user_id = %s
-              AND product_id = %s
-        """, (session['user_id'], product_id))
-
-        item = cursor.fetchone()
-
-        if item:
-
-            if item['quantity'] > 1:
-
-                cursor.execute("""
-                    UPDATE cart_items
-                    SET quantity = quantity - 1
-                    WHERE user_id = %s
-                      AND product_id = %s
-                """, (session['user_id'], product_id))
-
-            else:
-
-                cursor.execute("""
-                    DELETE FROM cart_items
-                    WHERE user_id = %s
-                      AND product_id = %s
-                """, (session['user_id'], product_id))
-
-        db.commit()
-        cursor.close()
-        db.close()
-
-    return redirect(url_for('cart'))
 @app.route('/order_success')
 @login_required
 def order_success():
     return render_template('order_success.html')
 
-# ---------- ADMIN ----------
+# ── Admin ──────────────────────────────────────────────────────────────────────
 @app.route('/admin')
 @admin_required
 def admin():
+    products = [dict(doc.to_dict(), id=doc.id)
+                for doc in db.collection('products').get()]
+    categories = [doc.to_dict() for doc in db.collection('categories').get()]
+    return render_template('admin.html', products=products, categories=categories)
 
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-
-    cursor.execute("SELECT * FROM products")
-    products = cursor.fetchall()
-
-    cursor.execute("""
-        SELECT *
-        FROM categories
-        ORDER BY name
-    """)
-    categories = cursor.fetchall()
-
-    cursor.close()
-    db.close()
-
-    return render_template(
-        'admin.html',
-        products=products,
-        categories=categories
-    )
 @app.route('/admin/add', methods=['POST'])
 @admin_required
 def admin_add():
-
-    name = request.form['name']
-    category = request.form['category']
-    price = request.form['price']
-    description = request.form['description']
-    image_url = request.form['image_url']
-
-    db = get_db()
-    cursor = db.cursor()
-
-    cursor.execute("""
-        INSERT INTO products
-        (name, category, price, description, image_url)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (
-        name,
-        category,
-        price,
-        description,
-        image_url
-    ))
-
-    db.commit()
-
-    cursor.close()
-    db.close()
-
+    db.collection('products').add({
+        'name':        request.form['name'],
+        'category':    request.form['category'],
+        'price':       float(request.form['price']),
+        'description': request.form['description'],
+        'image_url':   request.form['image_url'],
+    })
     flash('Product added successfully.', 'success')
     return redirect(url_for('admin'))
+
 @app.route('/admin/add-category', methods=['POST'])
 @admin_required
 def add_category():
-
-    category_name = request.form['category_name'].strip()
-
-    if not category_name:
-        flash('Category name is required.', 'error')
-        return redirect(url_for('admin'))
-
-    db = get_db()
-    cursor = db.cursor()
-
-    cursor.execute("""
-        INSERT IGNORE INTO categories(name)
-        VALUES(%s)
-    """, (category_name,))
-
-    db.commit()
-
-    cursor.close()
-    db.close()
-
-    flash('Category added successfully.', 'success')
-
+    name = request.form['category_name'].strip()
+    if name:
+        existing = db.collection('categories').where('name', '==', name).limit(1).get()
+        if not existing:
+            db.collection('categories').add({'name': name})
+            flash('Category added.', 'success')
     return redirect(url_for('admin'))
-@app.route('/admin/delete/<int:product_id>')
+
+@app.route('/admin/delete/<product_id>')
 @admin_required
 def admin_delete(product_id):
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("DELETE FROM products WHERE id = %s", (product_id,))
-    db.commit()
-    cursor.close()
-    db.close()
-    flash('Product deleted successfully.', 'success')
+    db.collection('products').document(product_id).delete()
+    flash('Product deleted.', 'success')
     return redirect(url_for('admin'))
 
 if __name__ == '__main__':
