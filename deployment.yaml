@@ -19,11 +19,15 @@ spec:
         ports:
         - containerPort: 5000
         env:
-        - name: DB_HOST
-          value: "mysql-service"
-        - name: DB_USER
-          value: "shopease"
-        - name: DB_PASSWORD
-          value: "yourpassword"
-        - name: DB_NAME
-          value: "ecommerce"
+        - name: FLASK_SECRET_KEY
+          value: "shopease_secret_key"
+        - name: FIREBASE_KEY
+          value: "/etc/firebase/firebase-key.json"
+        volumeMounts:
+        - name: firebase-key
+          mountPath: /etc/firebase
+          readOnly: true
+      volumes:
+      - name: firebase-key
+        secret:
+          secretName: firebase-secret
