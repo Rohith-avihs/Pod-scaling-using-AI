@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shopease-scaler
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shopease-scaler
+  template:
+    metadata:
+      labels:
+        app: shopease-scaler
+    spec:
+      serviceAccountName: scaler-sa
+      containers:
+      - name: scaler
+        image: 217266131527.dkr.ecr.ap-south-1.amazonaws.com/shopease-scaler:latest
+        env:
+        - name: PROMETHEUS_URL
+          value: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"

@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests kubernetes numpy
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+COPY scaler.py .
+COPY k8s_ppo_model.pth .
+
+CMD ["python3", "-u", "scaler.py"]
