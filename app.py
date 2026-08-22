@@ -4,6 +4,7 @@ from functools import wraps
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+import time
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'shopease_secret_key')
@@ -14,6 +15,18 @@ if not firebase_admin._apps:
     cred = credentials.Certificate(os.getenv('FIREBASE_KEY', 'firebase-key.json'))
     firebase_admin.initialize_app(cred, {'projectId': 'shopease-24'})
 db = firestore.client()
+
+# ── In-memory cache to prevent Firebase quota exhaustion ──────────────────────
+_cache = {}
+CACHE_TTL = 60  # seconds
+
+def get_cached(key, fetch_fn):
+    now = time.time()
+    if key in _cache and now - _cache[key]['time'] < CACHE_TTL:
+        return _cache[key]['data']
+    data = list(fetch_fn())
+    _cache[key] = {'data': data, 'time': now}
+    return data
 
 # ── Auth Decorators ────────────────────────────────────────────────────────────
 def login_required(f):
@@ -49,7 +62,6 @@ def register():
             flash('All fields are required.', 'error')
             return redirect(url_for('register'))
 
-        # check existing
         existing = db.collection('users').where('username', '==', username).limit(1).get()
         if existing:
             flash('Username already exists.', 'error')
@@ -116,13 +128,13 @@ def index():
     max_price    = request.args.get('max_price', '').strip()
     sort_by      = request.args.get('sort', '').strip()
 
-    products_ref = db.collection('products')
     if category:
-        products_ref = products_ref.where('category', '==', category)
-    docs = products_ref.get()
+        all_docs = list(db.collection('products').where('category', '==', category).get())
+    else:
+        all_docs = get_cached('products', db.collection('products').get)
 
     products = []
-    for doc in docs:
+    for doc in all_docs:
         p = doc.to_dict()
         p['id'] = doc.id
         if search_query and search_query.lower() not in p['name'].lower():
@@ -144,7 +156,9 @@ def index():
     elif sort_by == 'name_asc':
         products.sort(key=lambda x: x['name'])
 
-    categories = [doc.to_dict() for doc in db.collection('categories').get()]
+    cat_docs = get_cached('categories', db.collection('categories').get)
+    categories = [doc.to_dict() for doc in cat_docs]
+
     return render_template('index.html', products=products, categories=categories,
                            search_query=search_query, min_price=min_price,
                            max_price=max_price, sort_by=sort_by, category=category)
@@ -286,8 +300,9 @@ def order_success():
 @admin_required
 def admin():
     products = [dict(doc.to_dict(), id=doc.id)
-                for doc in db.collection('products').get()]
-    categories = [doc.to_dict() for doc in db.collection('categories').get()]
+                for doc in get_cached('products', db.collection('products').get)]
+    categories = [doc.to_dict()
+                  for doc in get_cached('categories', db.collection('categories').get)]
     return render_template('admin.html', products=products, categories=categories)
 
 @app.route('/admin/add', methods=['POST'])
@@ -300,6 +315,7 @@ def admin_add():
         'description': request.form['description'],
         'image_url':   request.form['image_url'],
     })
+    _cache.pop('products', None)  # clear cache
     flash('Product added successfully.', 'success')
     return redirect(url_for('admin'))
 
@@ -311,6 +327,7 @@ def add_category():
         existing = db.collection('categories').where('name', '==', name).limit(1).get()
         if not existing:
             db.collection('categories').add({'name': name})
+            _cache.pop('categories', None)  # clear cache
             flash('Category added.', 'success')
     return redirect(url_for('admin'))
 
@@ -318,6 +335,7 @@ def add_category():
 @admin_required
 def admin_delete(product_id):
     db.collection('products').document(product_id).delete()
+    _cache.pop('products', None)  # clear cache
     flash('Product deleted.', 'success')
     return redirect(url_for('admin'))
 

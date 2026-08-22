@@ -1,0 +1,87 @@
+name: ShopEase CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Build and Deploy to AWS EKS
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-south-1
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build and push app image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/shopease:$IMAGE_TAG .
+        docker tag $ECR_REGISTRY/shopease:$IMAGE_TAG \
+          $ECR_REGISTRY/shopease:latest
+        docker push $ECR_REGISTRY/shopease:$IMAGE_TAG
+        docker push $ECR_REGISTRY/shopease:latest
+
+    - name: Build and push scaler image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/shopease-scaler:$IMAGE_TAG \
+          -f Dockerfile.scaler .
+        docker tag $ECR_REGISTRY/shopease-scaler:$IMAGE_TAG \
+          $ECR_REGISTRY/shopease-scaler:latest
+        docker push $ECR_REGISTRY/shopease-scaler:$IMAGE_TAG
+        docker push $ECR_REGISTRY/shopease-scaler:latest
+
+    - name: Check if EKS cluster exists
+      id: check-cluster
+      run: |
+        if aws eks describe-cluster \
+          --name shopease-cluster \
+          --region ap-south-1 2>/dev/null; then
+          echo "CLUSTER_EXISTS=true" >> $GITHUB_ENV
+        else
+          echo "CLUSTER_EXISTS=false" >> $GITHUB_ENV
+          echo "⚠️ Cluster not running - skipping deployment"
+        fi
+
+    - name: Update kubeconfig
+      if: env.CLUSTER_EXISTS == 'true'
+      run: |
+        aws eks update-kubeconfig \
+          --region ap-south-1 \
+          --name shopease-cluster
+
+    - name: Deploy to EKS
+      if: env.CLUSTER_EXISTS == 'true'
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        kubectl set image deployment/shopease \
+          shopease=$ECR_REGISTRY/shopease:$IMAGE_TAG
+        kubectl set image deployment/shopease-scaler \
+          scaler=$ECR_REGISTRY/shopease-scaler:$IMAGE_TAG
+        kubectl rollout status deployment/shopease
+        kubectl rollout status deployment/shopease-scaler
+
+    - name: Verify deployment
+      if: env.CLUSTER_EXISTS == 'true'
+      run: |
+        kubectl get pods
+        kubectl get services
+        echo "✅ Deployment successful!"
