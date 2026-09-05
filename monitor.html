@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShopEase Cloud Monitor</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6f8;color:#20262e}
+.wrap{max-width:1500px;margin:auto;padding:28px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:24px;border-bottom:1px solid #d9dee5;padding-bottom:18px}
+h1{margin:0;font-size:26px;font-weight:600;color:#17202a}
+.sub{color:#687585;margin-top:6px;font-size:14px}
+.status{padding:7px 12px;border:1px solid #cfd6de;border-radius:4px;background:#fff;color:#3f4b59;font-size:13px;font-weight:600}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+input,button{border:1px solid #c8d0d9;background:#fff;color:#27313c;padding:9px 11px;border-radius:4px;font-size:13px}
+input{min-width:330px}
+button{cursor:pointer}
+button:hover{background:#eef1f4}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.card{background:#fff;border:1px solid #d9dee5;border-radius:5px;padding:18px;box-shadow:0 1px 2px rgba(20,30,40,.04)}
+.label{font-size:12px;color:#687585;text-transform:uppercase;letter-spacing:.04em}
+.value{font-size:27px;font-weight:600;margin-top:7px;color:#1e2935}
+.unit{font-size:12px;color:#687585;margin-left:4px;font-weight:400}
+.wide{grid-column:span 2}
+.full{grid-column:1/-1}
+.card h2{font-size:15px;font-weight:600;margin:0 0 14px;color:#26313d}
+canvas{width:100%;height:230px;background:#fbfcfd;border:1px solid #e2e6eb;border-radius:3px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:10px;border-bottom:1px solid #e2e6eb}
+th{color:#687585;font-weight:600;background:#fafbfc}
+.ok{color:#28734a}.warn{color:#8a6500}.bad{color:#a33a3a}
+.footer{color:#7a8795;font-size:12px;margin-top:18px}
+@media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}.wide{grid-column:span 2}}
+@media(max-width:650px){.grid{grid-template-columns:1fr}.wide{grid-column:span 1}.wrap{padding:14px}input{min-width:100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>ShopEase Cloud Monitor</h1>
+    <div class="sub">Kubernetes • Prometheus • PPO Scaler • Real-time infrastructure metrics</div>
+  </div>
+  <div id="connection" class="status">Connecting</div>
+</header>
+
+<div class="controls">
+  <input id="promUrl" value="http://localhost:9090" placeholder="Prometheus URL">
+  <button onclick="saveConfig()">Connect</button>
+  <button onclick="refreshAll()">Refresh now</button>
+  <span id="updated" class="sub" style="padding:10px">Never updated</span>
+</div>
+
+<div class="grid">
+  <div class="card"><div class="label">CPU Usage</div><div class="value" id="cpu">--<span class="unit">%</span></div></div>
+  <div class="card"><div class="label">Memory Usage</div><div class="value" id="memory">--<span class="unit">%</span></div></div>
+  <div class="card"><div class="label">Pod Count</div><div class="value" id="pods">--</div></div>
+  <div class="card"><div class="label">Running Scaler Pods</div><div class="value" id="scalerPods">--</div></div>
+  <div class="card"><div class="label">Request Rate</div><div class="value" id="rps">--<span class="unit">req/s</span></div></div>
+  <div class="card"><div class="label">Average Latency</div><div class="value" id="latency">--<span class="unit">ms</span></div></div>
+  <div class="card"><div class="label">CPU Cores</div><div class="value" id="cores">--</div></div>
+  <div class="card"><div class="label">Memory Used</div><div class="value" id="memUsed">--<span class="unit">MB</span></div></div>
+
+  <div class="card wide">
+    <h2>CPU Usage History</h2><canvas id="cpuChart"></canvas>
+  </div>
+  <div class="card wide">
+    <h2>Memory Usage History</h2><canvas id="memChart"></canvas>
+  </div>
+  <div class="card wide">
+    <h2>Request Rate History</h2><canvas id="rpsChart"></canvas>
+  </div>
+  <div class="card wide">
+    <h2>Latency History</h2><canvas id="latChart"></canvas>
+  </div>
+
+  <div class="card wide">
+    <h2>Kubernetes Workloads</h2>
+    <table>
+      <thead><tr><th>Workload</th><th>Pods</th><th>Status</th><th>CPU</th><th>Memory</th></tr></thead>
+      <tbody id="workloads"><tr><td colspan="5">Loading...</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card wide">
+    <h2>Scaler / Self-Healing Status</h2>
+    <table>
+      <tbody>
+        <tr><th>Scaler</th><td id="scalerStatus">--</td></tr>
+        <tr><th>Current replicas</th><td id="replicas">--</td></tr>
+        <tr><th>Scaling signal</th><td id="signal">--</td></tr>
+        <tr><th>Last update</th><td id="scaleTime">--</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card full">
+    <h2>Recent Scaling / Monitoring Events</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Event</th><th>Value</th><th>Status</th></tr></thead>
+      <tbody id="events"><tr><td colspan="4">Waiting for metrics...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="footer">
+  Dashboard refreshes every 15 seconds. History is read directly from Prometheus using range queries.
+  Prometheus must be reachable from this browser.
+</div>
+</div>
+
+<script>
+const state = {
+  cpu:[], mem:[], rps:[], lat:[],
+  cpuTimes:[], memTimes:[], rpsTimes:[], latTimes:[],
+  events:[], lastReplicas:null
+};
+
+function base(){
+  return document.getElementById('promUrl').value.replace(/\/+$/,'');
+}
+
+function saveConfig(){
+  localStorage.setItem('promUrl',base());
+  refreshAll();
+}
+
+async function prom(query){
+  const r=await fetch(base()+"/api/v1/query?query="+encodeURIComponent(query));
+  if(!r.ok) throw new Error("Prometheus HTTP "+r.status);
+  const j=await r.json();
+  if(j.status!=="success") throw new Error("Prometheus query failed");
+  return j.data.result;
+}
+
+async function promRange(query,minutes=10,step=15){
+  const end=Math.floor(Date.now()/1000);
+  const start=end-(minutes*60);
+
+  const url=base()+"/api/v1/query_range?query="+
+    encodeURIComponent(query)+
+    "&start="+start+
+    "&end="+end+
+    "&step="+step;
+
+  const r=await fetch(url);
+  if(!r.ok) throw new Error("Prometheus range HTTP "+r.status);
+
+  const j=await r.json();
+  if(j.status!=="success") throw new Error("Prometheus range query failed");
+
+  return j.data.result;
+}
+
+function num(results,fallback=0){
+  if(!results || !results.length)return fallback;
+  const v=parseFloat(results[0].value[1]);
+  return Number.isFinite(v)?v:fallback;
+}
+
+function fmt(v,d=1){
+  return Number.isFinite(v)?v.toFixed(d):"--";
+}
+
+function set(id,text){
+  document.getElementById(id).textContent=text;
+}
+
+/*
+ * Convert Prometheus range result into a single time series.
+ * If multiple pods/series exist, values are summed at each timestamp.
+ */
+function rangeToSeries(results){
+  if(!results || !results.length)return {times:[],values:[]};
+
+  const map=new Map();
+
+  for(const series of results){
+    for(const pair of series.values || []){
+      const t=Number(pair[0]);
+      const v=Number(pair[1]);
+      if(!Number.isFinite(t) || !Number.isFinite(v))continue;
+      map.set(t,(map.get(t)||0)+v);
+    }
+  }
+
+  const points=[...map.entries()].sort((a,b)=>a[0]-b[0]);
+
+  return {
+    times:points.map(p=>p[0]),
+    values:points.map(p=>p[1])
+  };
+}
+
+/*
+ * Latency range query returns one already-aggregated series,
+ * so it can be plotted directly.
+ */
+function rangeToSingleSeries(results){
+  if(!results || !results.length)return {times:[],values:[]};
+
+  const series=results[0];
+  const points=(series.values || [])
+    .map(p=>[Number(p[0]),Number(p[1])])
+    .filter(p=>Number.isFinite(p[0]) && Number.isFinite(p[1]));
+
+  return {
+    times:points.map(p=>p[0]),
+    values:points.map(p=>p[1])
+  };
+}
+
+async function refreshAll(){
+  const c=document.getElementById('connection');
+
+  try{
+    /*
+     * Current values.
+     *
+     * Request rate and latency explicitly select the ShopEase job.
+     * This prevents Prometheus metrics from other Flask/HTTP services
+     * from affecting the dashboard.
+     */
+    const cpuQ='sum(rate(container_cpu_usage_seconds_total{namespace="default",pod=~"shopease-.*"}[1m]))*100';
+
+    const memQ='sum(container_memory_working_set_bytes{namespace="default",pod=~"shopease-.*"})';
+
+    const podsQ='count(kube_pod_info{namespace="default",pod=~"shopease-.*"})';
+
+    const scalerQ='count(kube_pod_status_phase{namespace="default",pod=~"shopease-scaler-.*",phase="Running"})';
+
+    const rpsQ='sum(rate(flask_http_request_total{job="shopease-service"}[1m]))';
+
+    const latencyQ='(sum(rate(flask_http_request_duration_seconds_sum{job="shopease-service"}[1m])) / sum(rate(flask_http_request_duration_seconds_count{job="shopease-service"}[1m])))*1000';
+
+    const coresQ='sum(kube_pod_container_resource_requests{namespace="default",pod=~"shopease-.*",resource="cpu"})';
+
+    const [cpu,mem,pods,scaler,rps,lat,cores]=await Promise.all([
+      prom(cpuQ),
+      prom(memQ),
+      prom(podsQ),
+      prom(scalerQ),
+      prom(rpsQ),
+      prom(latencyQ),
+      prom(coresQ)
+    ]);
+
+    const cv=num(cpu);
+    const mv=num(mem)/1024/1024;
+    const rv=num(rps);
+    const lv=num(lat);
+    const pv=Math.round(num(pods));
+    const sv=Math.round(num(scaler));
+
+    set('cpu',fmt(cv));
+    set('memory',fmt(Math.min(100,(mv/1024)*100)));
+    set('pods',fmt(pv,0));
+    set('scalerPods',fmt(sv,0));
+    set('rps',fmt(rv));
+    set('latency',fmt(lv));
+    set('cores',fmt(num(cores),2));
+    set('memUsed',fmt(mv));
+
+    /*
+     * IMPORTANT:
+     * The charts below use Prometheus query_range instead of only
+     * storing the current value every 15 seconds.
+     *
+     * This means refreshing/reopening monitor.html still shows the
+     * recent 10-minute history, instead of starting from an empty chart.
+     */
+    const cpuRangeQ='sum(rate(container_cpu_usage_seconds_total{namespace="default",pod=~"shopease-.*"}[1m]))*100';
+
+    const memRangeQ='sum(container_memory_working_set_bytes{namespace="default",pod=~"shopease-.*"})/1024/1024';
+
+    const rpsRangeQ='sum(rate(flask_http_request_total{job="shopease-service"}[1m]))';
+
+    const latencyRangeQ='(sum(rate(flask_http_request_duration_seconds_sum{job="shopease-service"}[1m])) / sum(rate(flask_http_request_duration_seconds_count{job="shopease-service"}[1m])))*1000';
+
+    const [cpuRange,memRange,rpsRange,latRange]=await Promise.all([
+      promRange(cpuRangeQ,10,15),
+      promRange(memRangeQ,10,15),
+      promRange(rpsRangeQ,10,15),
+      promRange(latencyRangeQ,10,15)
+    ]);
+
+    const cpuSeries=rangeToSingleSeries(cpuRange);
+    const memSeries=rangeToSeries(memRange);
+    const rpsSeries=rangeToSingleSeries(rpsRange);
+    const latSeries=rangeToSingleSeries(latRange);
+
+    state.cpu=cpuSeries.values;
+    state.mem=memSeries.values;
+    state.rps=rpsSeries.values;
+    state.lat=latSeries.values;
+
+    state.cpuTimes=cpuSeries.times;
+    state.memTimes=memSeries.times;
+    state.rpsTimes=rpsSeries.times;
+    state.latTimes=latSeries.times;
+
+    draw('cpuChart',state.cpu,'CPU %');
+    draw('memChart',state.mem,'MB');
+    draw('rpsChart',state.rps,'req/s');
+    draw('latChart',state.lat,'ms');
+
+    set('replicas',pv);
+    set('scalerStatus',sv>0?'Running':'Not detected');
+
+    const signal =
+      rv>50 || cv>80 ? 'Scale up likely' :
+      cv<30 && rv<5 ? 'Scale down possible' :
+      'Stable';
+
+    set('signal',signal);
+
+    if(state.lastReplicas!==null && state.lastReplicas!==pv){
+      addEvent('Replica change',pv,'Scaling');
+    }
+
+    state.lastReplicas=pv;
+
+    set('scaleTime',new Date().toLocaleTimeString());
+
+    document.getElementById('workloads').innerHTML=`
+      <tr>
+        <td>shopease</td>
+        <td>${pv}</td>
+        <td class="ok">Running/metric detected</td>
+        <td>${fmt(cv)}%</td>
+        <td>${fmt(mv)} MB</td>
+      </tr>
+      <tr>
+        <td>shopease-scaler</td>
+        <td>${sv}</td>
+        <td class="${sv>0?'ok':'bad'}">${sv>0?'Running':'Not detected'}</td>
+        <td colspan="2">PPO + Transformer scaler</td>
+      </tr>`;
+
+    c.textContent='Connected';
+    c.className='status ok';
+
+    set('updated','Updated '+new Date().toLocaleTimeString());
+
+  }catch(e){
+    c.textContent='Prometheus unavailable';
+    c.className='status bad';
+    set('updated','Error: '+e.message);
+  }
+}
+
+function addEvent(event,value,status){
+  state.events.unshift({
+    time:new Date().toLocaleTimeString(),
+    event,
+    value,
+    status
+  });
+
+  state.events=state.events.slice(0,12);
+
+  document.getElementById('events').innerHTML=
+    state.events.map(e=>
+      `<tr>
+        <td>${e.time}</td>
+        <td>${e.event}</td>
+        <td>${e.value}</td>
+        <td class="ok">${e.status}</td>
+      </tr>`
+    ).join('');
+}
+
+function draw(id,data,label){
+  const c=document.getElementById(id);
+  const x=c.getContext('2d');
+
+  const dpr=window.devicePixelRatio||1;
+  const w=c.clientWidth;
+  const h=c.clientHeight;
+
+  c.width=w*dpr;
+  c.height=h*dpr;
+
+  x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,w,h);
+
+  if(!data || !data.length){
+    x.fillStyle='#687585';
+    x.font='12px system-ui';
+    x.fillText('Waiting for Prometheus data...',10,25);
+    return;
+  }
+
+  const finite=data.filter(Number.isFinite);
+
+  if(!finite.length){
+    x.fillStyle='#687585';
+    x.font='12px system-ui';
+    x.fillText('No data',10,25);
+    return;
+  }
+
+  let max=Math.max(...finite);
+  let min=Math.min(...finite);
+
+  if(max===min){
+    const pad=Math.max(Math.abs(max)*0.05,1);
+    max+=pad;
+    min=Math.max(0,min-pad);
+  }else{
+    const pad=(max-min)*0.10;
+    max+=pad;
+    min=Math.max(0,min-pad);
+  }
+
+  const range=max-min||1;
+
+  x.strokeStyle='#d9dee5';
+  x.lineWidth=1;
+
+  for(let i=1;i<5;i++){
+    const y=h*i/5;
+    x.beginPath();
+    x.moveTo(0,y);
+    x.lineTo(w,y);
+    x.stroke();
+  }
+
+  x.strokeStyle='#52677d';
+  x.lineWidth=2;
+  x.beginPath();
+
+  finite.forEach((v,i)=>{
+    const px=finite.length===1 ? w/2 : i*(w/(finite.length-1));
+    const py=h-((v-min)/range)*(h-30)-15;
+
+    if(i===0)x.moveTo(px,py);
+    else x.lineTo(px,py);
+  });
+
+  x.stroke();
+
+  x.fillStyle='#687585';
+  x.font='11px system-ui';
+  x.fillText(label,8,16);
+
+  /*
+   * Show latest value on the graph.
+   */
+  const latest=finite[finite.length-1];
+
+  x.fillText(
+    Number.isFinite(latest) ? latest.toFixed(2) : '--',
+    Math.max(8,w-70),
+    16
+  );
+}
+
+window.addEventListener('resize',()=>{
+  draw('cpuChart',state.cpu,'CPU %');
+  draw('memChart',state.mem,'MB');
+  draw('rpsChart',state.rps,'req/s');
+  draw('latChart',state.lat,'ms');
+});
+
+document.getElementById('promUrl').value=
+  localStorage.getItem('promUrl') || 'http://localhost:9090';
+
+refreshAll();
+
+/*
+ * Keep updating every 15 seconds.
+ * Each refresh retrieves the latest 10 minutes from Prometheus,
+ * so the charts remain populated even after a page refresh.
+ */
+setInterval(refreshAll,15000);
+</script>
+</body>
+</html>
+

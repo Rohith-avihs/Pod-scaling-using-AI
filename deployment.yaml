@@ -1,33 +1,58 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: shopease
+
 spec:
-  replicas: 2
+  replicas: 1
+
   selector:
     matchLabels:
       app: shopease
+
   template:
+
     metadata:
       labels:
         app: shopease
+
     spec:
+
       containers:
+
       - name: shopease
+
         image: 217266131527.dkr.ecr.ap-south-1.amazonaws.com/shopease:latest
+
         imagePullPolicy: Always
+
         ports:
         - containerPort: 5000
+
         env:
+
         - name: FLASK_SECRET_KEY
           value: "shopease_secret_key"
-        - name: FIREBASE_KEY
-          value: "/etc/firebase/firebase-key.json"
-        volumeMounts:
-        - name: firebase-key
-          mountPath: /etc/firebase
-          readOnly: true
-      volumes:
-      - name: firebase-key
-        secret:
-          secretName: firebase-secret
+
+        - name: DB_HOST
+          value: "mysql-service"
+
+        - name: DB_USER
+          value: "shopease"
+
+        - name: DB_PASSWORD
+          value: "yourpassword"
+
+        - name: DB_NAME
+          value: "ecommerce"
+
+        resources:
+
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+
+          limits:
+            cpu: "1000m"
+            memory: "512Mi"

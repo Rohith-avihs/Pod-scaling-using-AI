@@ -1,0 +1,821 @@
+import os
+import time
+import requests
+import torch
+import torch.nn as nn
+
+from kubernetes import client, config
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+MIN_PODS = 1
+MAX_PODS = 4
+
+SEQ_LEN = 20
+INTERVAL = 15
+
+# PPO actions:
+# 0 = -2 pods
+# 1 = -1 pod
+# 2 = no change
+# 3 = +1 pod
+# 4 = +2 pods
+ACTION_DELTAS = [-2, -1, 0, 1, 2]
+
+# Safety thresholds
+CPU_HIGH = 0.70
+CPU_LOW = 0.20
+
+MEM_HIGH = 0.75
+MEM_LOW = 0.25
+
+RPS_HIGH = 0.70
+RPS_LOW = 0.15
+
+LATENCY_HIGH = 0.70
+
+# PPO must be reasonably confident before controlling scaling
+PPO_CONFIDENCE_THRESHOLD = 0.70
+
+
+# ============================================================
+# KUBERNETES CONFIG
+# ============================================================
+
+try:
+config.load_incluster_config()
+IN_CLUSTER = True
+print("✅ Kubernetes in-cluster configuration loaded")
+except Exception:
+config.load_kube_config()
+IN_CLUSTER = False
+print("✅ Kubernetes local configuration loaded")
+
+
+k8s_apps = client.AppsV1Api()
+
+
+# ============================================================
+# PROMETHEUS CONFIG
+# ============================================================
+
+PROMETHEUS_URL = os.getenv(
+"PROMETHEUS_URL",
+"http://prometheus-kube-prometheus-prometheus.monitoring:9090"
+)
+
+print(f"📊 Prometheus: {PROMETHEUS_URL}")
+
+
+# ============================================================
+# TRANSFORMER
+# ============================================================
+
+class TransformerFeatureExtractor(nn.Module):
+
+def __init__(
+self,
+input_dim=6,
+d_model=64,
+nhead=4,
+seq_len=20
+):
+super().__init__()
+
+self.input_projection = nn.Linear(
+input_dim,
+d_model
+)
+
+self.pos_embedding = nn.Parameter(
+torch.zeros(1, seq_len, d_model)
+)
+
+encoder_layer = nn.TransformerEncoderLayer(
+d_model=d_model,
+nhead=nhead,
+dim_feedforward=128,
+batch_first=True
+)
+
+self.transformer_encoder = nn.TransformerEncoder(
+encoder_layer,
+num_layers=1
+)
+
+def forward(self, x):
+
+x = self.input_projection(x)
+
+x = x + self.pos_embedding[:, :x.size(1), :]
+
+x = self.transformer_encoder(x)
+
+return x[:, -1, :]
+
+
+# ============================================================
+# PPO ACTOR
+# ============================================================
+
+class PPOActor(nn.Module):
+
+def __init__(self):
+
+super().__init__()
+
+self.feature_extractor = TransformerFeatureExtractor()
+
+self.actor = nn.Sequential(
+nn.Linear(64, 32),
+nn.ReLU(),
+nn.Linear(32, 5)
+)
+
+self.critic = nn.Sequential(
+nn.Linear(64, 32),
+nn.ReLU(),
+nn.Linear(32, 1)
+)
+
+def forward(self, x):
+
+features = self.feature_extractor(x)
+
+logits = self.actor(features)
+
+value = self.critic(features)
+
+return logits, value
+
+
+# ============================================================
+# LOAD PPO MODEL
+# ============================================================
+
+model = PPOActor()
+
+MODEL_PATH = "/app/k8s_ppo_model.pth"
+
+if os.path.exists(MODEL_PATH):
+
+try:
+
+model.load_state_dict(
+torch.load(
+MODEL_PATH,
+map_location="cpu"
+)
+)
+
+model.eval()
+
+print("✅ PPO Transformer model loaded")
+
+except Exception as e:
+
+print(f"⚠️ Could not load PPO model: {e}")
+
+else:
+
+print("⚠️ PPO model not found")
+
+
+# ============================================================
+# PROMETHEUS QUERY
+# ============================================================
+
+def query_prometheus(promql):
+
+try:
+
+response = requests.get(
+f"{PROMETHEUS_URL}/api/v1/query",
+params={
+"query": promql
+},
+timeout=5
+)
+
+response.raise_for_status()
+
+data = response.json()
+
+if data.get("status") != "success":
+return None
+
+results = data["data"]["result"]
+
+if not results:
+return None
+
+return float(
+results[0]["value"][1]
+)
+
+except Exception as e:
+
+print(
+f"⚠️ Prometheus query failed: {e}"
+)
+
+return None
+
+
+# ============================================================
+# KUBERNETES POD COUNT
+# ============================================================
+
+def get_current_pods():
+
+try:
+
+deployment = k8s_apps.read_namespaced_deployment(
+name="shopease",
+namespace="default"
+)
+
+return deployment.spec.replicas
+
+except Exception as e:
+
+print(
+f"⚠️ Failed to get pod count: {e}"
+)
+
+return 1
+
+
+# ============================================================
+# SCALE PODS
+# ============================================================
+
+def scale_pods(target):
+
+target = max(
+MIN_PODS,
+min(MAX_PODS, target)
+)
+
+try:
+
+body = {
+"spec": {
+"replicas": target
+}
+}
+
+k8s_apps.patch_namespaced_deployment(
+name="shopease",
+namespace="default",
+body=body
+)
+
+return target
+
+except Exception as e:
+
+print(
+f"❌ Scaling failed: {e}"
+)
+
+return get_current_pods()
+
+
+# ============================================================
+# CPU
+# ============================================================
+
+def get_cpu():
+
+query = """
+sum(
+rate(
+container_cpu_usage_seconds_total{
+namespace="default",
+pod=~"shopease-[a-z0-9-]+",
+container="shopease"
+}[2m]
+)
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+return 0.0
+
+# Normalize around 1 CPU
+return min(1.0, max(0.0, value))
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+def get_memory():
+
+query = """
+sum(
+container_memory_working_set_bytes{
+namespace="default",
+pod=~"shopease-[a-z0-9-]+",
+container="shopease"
+}
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+return 0.0
+
+# Application container memory limit = 512 MiB per pod
+pods = max(get_current_pods(), 1)
+
+memory_per_pod = value / pods
+
+memory_ratio = (
+memory_per_pod /
+(512 * 1024 * 1024)
+)
+
+return min(
+1.0,
+max(0.0, memory_ratio)
+)
+
+
+# ============================================================
+# REQUESTS PER SECOND
+# ============================================================
+
+def get_rps():
+
+query = """
+sum(
+rate(
+flask_http_request_total{
+namespace="default",
+pod=~"shopease-[a-z0-9-]+"
+}[1m]
+)
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+
+# Try without namespace/pod labels
+query = """
+sum(
+rate(
+flask_http_request_total[1m]
+)
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+return 0.0
+
+# Normalize around 10 requests/sec
+return min(
+1.0,
+max(0.0, value / 10.0)
+)
+
+
+# ============================================================
+# P95 LATENCY
+# ============================================================
+
+def get_latency():
+
+query = """
+histogram_quantile(
+0.95,
+sum(
+rate(
+flask_http_request_duration_seconds_bucket{
+namespace="default",
+pod=~"shopease-[a-z0-9-]+"
+}[2m]
+)
+) by (le)
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+
+query = """
+histogram_quantile(
+0.95,
+sum(
+rate(
+flask_http_request_duration_seconds_bucket[2m]
+)
+) by (le)
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+return 0.0
+
+# 1 second = 100% normalized latency
+return min(
+1.0,
+max(0.0, value)
+)
+
+
+# ============================================================
+# NETWORK
+# ============================================================
+
+def get_network():
+
+query = """
+sum(
+rate(
+container_network_receive_bytes_total{
+namespace="default",
+pod=~"shopease-[a-z0-9-]+"
+}[2m]
+)
+)
+"""
+
+value = query_prometheus(query)
+
+if value is None:
+return 0.0
+
+# Normalize around 10 MB/s
+return min(
+1.0,
+max(0.0, value / 10_000_000)
+)
+
+
+# ============================================================
+# GET ALL REAL METRICS
+# ============================================================
+
+def get_metrics(pods):
+
+cpu = get_cpu()
+
+memory = get_memory()
+
+rps = get_rps()
+
+latency = get_latency()
+
+network = get_network()
+
+# 6 inputs required by Transformer
+#
+# 1. pod ratio
+# 2. CPU
+# 3. memory
+# 4. network
+# 5. RPS
+# 6. latency
+
+return [
+pods / MAX_PODS,
+cpu,
+memory,
+network,
+rps,
+latency
+]
+
+
+# ============================================================
+# PPO DECISION
+# ============================================================
+
+history = []
+
+
+def ppo_action(metrics):
+
+global history
+
+history.append(metrics)
+
+if len(history) > SEQ_LEN:
+history.pop(0)
+
+padded = (
+[[0.0] * 6] *
+(SEQ_LEN - len(history))
+) + history
+
+tensor = torch.tensor(
+[padded],
+dtype=torch.float32
+)
+
+with torch.no_grad():
+
+logits, _ = model(tensor)
+
+probabilities = torch.softmax(
+logits,
+dim=-1
+)
+
+action = torch.argmax(
+probabilities,
+dim=-1
+).item()
+
+return (
+action,
+probabilities.numpy()[0]
+)
+
+
+# ============================================================
+# RULE-BASED SAFETY DECISION
+# ============================================================
+
+def rule_based_action(metrics):
+
+_, cpu, memory, network, rps, latency = metrics
+
+# --------------------------------------------------------
+# SCALE UP
+# --------------------------------------------------------
+
+if (
+cpu > CPU_HIGH
+or memory > MEM_HIGH
+or latency > LATENCY_HIGH
+or (rps > RPS_HIGH and (cpu > 0.40 or latency > 0.40))
+or network > 0.80
+):
+return 1
+
+# --------------------------------------------------------
+# SCALE DOWN
+# --------------------------------------------------------
+
+if (
+cpu < CPU_LOW
+and memory < MEM_LOW
+and rps < RPS_LOW
+and latency < 0.30
+):
+return -1
+
+# --------------------------------------------------------
+# KEEP
+# --------------------------------------------------------
+
+return 0
+
+
+# ============================================================
+# HYBRID DECISION
+# ============================================================
+
+def hybrid_decision(
+pods,
+metrics,
+ppo_delta,
+ppo_confidence
+):
+
+rule_delta = rule_based_action(metrics)
+
+_, cpu, memory, network, rps, latency = metrics
+
+# --------------------------------------------------------
+# Safety override
+# --------------------------------------------------------
+
+if (
+cpu > 0.90
+or memory > 0.90
+or latency > 0.90
+):
+
+return (
+1,
+"Safety Rule"
+)
+
+# --------------------------------------------------------
+# If PPO is confident, use PPO
+# --------------------------------------------------------
+
+if ppo_confidence >= PPO_CONFIDENCE_THRESHOLD:
+
+return (
+ppo_delta,
+"PPO"
+)
+
+# --------------------------------------------------------
+# Otherwise use rules
+# --------------------------------------------------------
+
+return (
+rule_delta,
+"Rule"
+)
+
+
+# ============================================================
+# MAIN AUTOSCALER
+# ============================================================
+
+print("")
+print("=" * 70)
+print("🚀 SHOPEASE HYBRID AI AUTOSCALER")
+print("=" * 70)
+print(f"Mode : {'IN-CLUSTER' if IN_CLUSTER else 'LOCAL'}")
+print(f"Min Pods : {MIN_PODS}")
+print(f"Max Pods : {MAX_PODS}")
+print(f"Interval : {INTERVAL}s")
+print(f"PPO Threshold: {PPO_CONFIDENCE_THRESHOLD}")
+print("=" * 70)
+
+
+step = 0
+
+
+while True:
+
+try:
+
+step += 1
+
+# ----------------------------------------------------
+# Current pods
+# ----------------------------------------------------
+
+pods = get_current_pods()
+
+# ----------------------------------------------------
+# Real Prometheus metrics
+# ----------------------------------------------------
+
+metrics = get_metrics(pods)
+
+(
+pod_ratio,
+cpu,
+memory,
+network,
+rps,
+latency
+) = metrics
+
+# ----------------------------------------------------
+# PPO
+# ----------------------------------------------------
+
+ppo_index, probabilities = ppo_action(
+metrics
+)
+
+ppo_delta = ACTION_DELTAS[
+ppo_index
+]
+
+ppo_confidence = float(
+probabilities[ppo_index]
+)
+
+# ----------------------------------------------------
+# Hybrid decision
+# ----------------------------------------------------
+
+final_delta, source = hybrid_decision(
+pods,
+metrics,
+ppo_delta,
+ppo_confidence
+)
+
+target_pods = max(
+MIN_PODS,
+min(
+MAX_PODS,
+pods + final_delta
+)
+)
+
+# ----------------------------------------------------
+# Scaling
+# ----------------------------------------------------
+
+if target_pods != pods:
+
+actual = scale_pods(
+target_pods
+)
+
+else:
+
+actual = pods
+
+# ----------------------------------------------------
+# Load classification
+# ----------------------------------------------------
+
+if (
+cpu > CPU_HIGH
+or memory > MEM_HIGH
+or rps > RPS_HIGH
+or latency > LATENCY_HIGH
+):
+
+load = "🔴 HIGH"
+
+elif (
+cpu > CPU_LOW
+or memory > MEM_LOW
+or rps > RPS_LOW
+):
+
+load = "🟡 MEDIUM"
+
+else:
+
+load = "🟢 LOW"
+
+# ----------------------------------------------------
+# Logging
+# ----------------------------------------------------
+
+print("")
+print(
+f"[Step {step:04d}] {load}"
+)
+
+print(
+f" Pods : {pods}"
+)
+
+print(
+f" CPU : {cpu:.1%}"
+)
+
+print(
+f" Memory : {memory:.1%}"
+)
+
+print(
+f" Network : {network:.1%}"
+)
+
+print(
+f" RPS : {rps:.1%}"
+)
+
+print(
+f" P95 Lat : {latency:.1%}"
+)
+
+print(
+f" PPO : action={ppo_delta:+d} "
+f"confidence={ppo_confidence:.1%}"
+)
+
+print(
+f" Rule : action="
+f"{rule_based_action(metrics):+d}"
+)
+
+print(
+f" Source : {source}"
+)
+
+print(
+f" Result : {pods} → {actual} pods"
+)
+
+time.sleep(INTERVAL)
+
+except Exception as e:
+
+print(
+f"❌ Autoscaler error: {e}"
+)
+
+time.sleep(INTERVAL)
